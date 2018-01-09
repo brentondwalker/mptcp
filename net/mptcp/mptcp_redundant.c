@@ -63,9 +63,15 @@ static bool redsched_get_active_valid_sks(struct sock *meta_sk)
 	}
 
 	if (active_valid_sks) {
+<<<<<<< HEAD
 		pr_info("\tredsched_get_active_valid_sks returning active_valid_sks = TRUE\n");
 	} else {
 		pr_info("\tredsched_get_active_valid_sks returning active_valid_sks = FALSE\n");
+=======
+		pr_info("\treturning active_valid_sks = TRUE\n");
+	} else {
+		pr_info("\treturning active_valid_sks = FALSE\n");
+>>>>>>> b84cdf2c84c226780665905fde381d7718284d68
 	}
 	return active_valid_sks;
 }
@@ -78,12 +84,20 @@ static bool redsched_use_subflow(struct sock *meta_sk,
 	pr_info("redsched_use_subflow\n");
 
 	if (!skb || !mptcp_is_available((struct sock *)tp, skb, false)) {
+<<<<<<< HEAD
 		pr_info("\tredsched_use_subflow returning FALSE because !mptcp_is_available\n");
+=======
+		pr_info("\treturning FALSE because !mptcp_is_available\n");
+>>>>>>> b84cdf2c84c226780665905fde381d7718284d68
 		return false;
 	}
 
 	if (TCP_SKB_CB(skb)->path_mask != 0) {
+<<<<<<< HEAD
 		pr_info("\tredsched_use_subflow returning subflow_is_active(tp)\n");
+=======
+		pr_info("\treturning subflow_is_active(tp)\n");
+>>>>>>> b84cdf2c84c226780665905fde381d7718284d68
 		return subflow_is_active(tp);
 	}
 
@@ -92,10 +106,17 @@ static bool redsched_use_subflow(struct sock *meta_sk,
 			active_valid_sks = redsched_get_active_valid_sks(meta_sk);
 
 		if (subflow_is_backup(tp) && active_valid_sks > 0) {
+<<<<<<< HEAD
 			pr_info("\tredsched_use_subflow returning FALSE because (subflow_is_backup(tp) && active_valid_sks > 0)\n");
 			return false;
 		} else {
 			pr_info("\tredsched_use_subflow returning TRUE because NOT (subflow_is_backup(tp) && active_valid_sks > 0)\n");
+=======
+			pr_info("\treturning FALSE because (subflow_is_backup(tp) && active_valid_sks > 0)\n");
+			return false;
+		} else {
+			pr_info("\treturning TRUE because NOT (subflow_is_backup(tp) && active_valid_sks > 0)\n");
+>>>>>>> b84cdf2c84c226780665905fde381d7718284d68
 			return true;
 		}
 	}
