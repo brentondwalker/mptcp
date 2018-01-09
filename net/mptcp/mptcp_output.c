@@ -433,6 +433,8 @@ static bool mptcp_skb_entail(struct sock *sk, struct sk_buff *skb, int reinject)
 	struct tcp_skb_cb *tcb;
 	struct sk_buff *subskb = NULL;
 
+	pr_info("mptcp_skb_entail( sk %p , sk_buff %p )\n", sk, skb);
+
 	if (!reinject)
 		TCP_SKB_CB(skb)->mptcp_flags |= (mpcb->snd_hiseq_index ?
 						  MPTCPHDR_SEQ64_INDEX : 0);
@@ -487,6 +489,7 @@ static bool mptcp_skb_entail(struct sock *sk, struct sk_buff *skb, int reinject)
 	 * segment is not part of the subflow but on a meta-only-level.
 	 */
 	if (!mptcp_is_data_fin(subskb) || tcb->end_seq != tcb->seq) {
+		pr_info("\tmptcp_skb_entail - tcp_add_write_queue_tail(subskb)\n");
 		tcp_add_write_queue_tail(sk, subskb);
 		sk->sk_wmem_queued += subskb->truesize;
 		sk_mem_charge(sk, subskb->truesize);
@@ -498,6 +501,7 @@ static bool mptcp_skb_entail(struct sock *sk, struct sk_buff *skb, int reinject)
 		 */
 		tcp_init_tso_segs(subskb, 1);
 		/* Empty data-fins are sent immediatly on the subflow */
+		pr_info("\tmptcp_skb_entail - tcp_transmit_skb(subskb)\n");
 		err = tcp_transmit_skb(sk, subskb, 1, GFP_ATOMIC);
 
 		/* It has not been queued, we can free it now. */
@@ -668,6 +672,8 @@ bool mptcp_write_xmit(struct sock *meta_sk, unsigned int mss_now, int nonagle,
 	unsigned int sublimit;
 	__u32 path_mask = 0;
 
+	pr_info("mptcp_write_xmit\n");
+
 	while ((skb = mpcb->sched_ops->next_segment(meta_sk, &reinject, &subsk,
 						    &sublimit))) {
 		unsigned int limit;
@@ -759,6 +765,7 @@ bool mptcp_write_xmit(struct sock *meta_sk, unsigned int mss_now, int nonagle,
 			mptcp_check_sndseq_wrap(meta_tp,
 						TCP_SKB_CB(skb)->end_seq -
 						TCP_SKB_CB(skb)->seq);
+
 			tcp_event_new_data_sent(meta_sk, skb);
 		}
 

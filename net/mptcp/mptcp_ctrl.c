@@ -88,6 +88,8 @@ static int proc_mptcp_path_manager(struct ctl_table *ctl, int write,
 	};
 	int ret;
 
+	pr_info("proc_mptcp_path_manager\n");
+
 	mptcp_get_default_path_manager(val);
 
 	ret = proc_dostring(&tbl, write, buffer, lenp, ppos);
@@ -106,6 +108,8 @@ static int proc_mptcp_scheduler(struct ctl_table *ctl, int write,
 		.maxlen = MPTCP_SCHED_NAME_MAX,
 	};
 	int ret;
+
+	pr_info("proc_mptcp_scheduler\n");
 
 	mptcp_get_default_scheduler(val);
 
@@ -296,6 +300,8 @@ static void mptcp_reqsk_new_mptcp(struct request_sock *req,
 	struct mptcp_request_sock *mtreq = mptcp_rsk(req);
 	const struct tcp_sock *tp = tcp_sk(sk);
 
+	pr_info("mptcp_reqsk_new_mptcp\n");
+
 	inet_rsk(req)->saw_mpc = 1;
 	/* MPTCP version agreement */
 	if (mopt->mptcp_ver >= tp->mptcp_ver)
@@ -428,6 +434,8 @@ void mptcp_disable_static_key(void)
 
 void mptcp_enable_sock(struct sock *sk)
 {
+	pr_info("mptcp_enable_sock\n");
+
 	if (!sock_flag(sk, SOCK_MPTCP)) {
 		sock_set_flag(sk, SOCK_MPTCP);
 		tcp_sk(sk)->mptcp_ver = sysctl_mptcp_version;
@@ -450,6 +458,8 @@ void mptcp_enable_sock(struct sock *sk)
 
 void mptcp_disable_sock(struct sock *sk)
 {
+	pr_info("mptcp_disable_sock\n");
+
 	if (sock_flag(sk, SOCK_MPTCP)) {
 		sock_reset_flag(sk, SOCK_MPTCP);
 
@@ -472,6 +482,8 @@ void mptcp_disable_sock(struct sock *sk)
 void mptcp_connect_init(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
+
+	pr_info("mptcp_connect_init\n");
 
 	rcu_read_lock_bh();
 	spin_lock(&mptcp_tk_hashlock);
@@ -640,6 +652,8 @@ void mptcp_sock_destruct(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 
+	pr_info("mptcp_sock_destruct\n");
+
 	if (!is_meta_sk(sk) && !tp->was_meta_sk) {
 		BUG_ON(!hlist_unhashed(&tp->mptcp->cb_list));
 
@@ -679,6 +693,8 @@ void mptcp_sock_destruct(struct sock *sk)
 
 void mptcp_destroy_sock(struct sock *sk)
 {
+	pr_info("mptcp_destroy_sock\n");
+
 	if (is_meta_sk(sk)) {
 		struct sock *sk_it, *tmpsk;
 
@@ -1250,6 +1266,8 @@ int mptcp_add_sock(struct sock *meta_sk, struct sock *sk, u8 loc_id, u8 rem_id,
 	struct mptcp_cb *mpcb	= tcp_sk(meta_sk)->mpcb;
 	struct tcp_sock *tp	= tcp_sk(sk);
 
+	pr_info("mptcp_add_sock\n");
+
 	tp->mptcp = kmem_cache_zalloc(mptcp_sock_cache, flags);
 	if (!tp->mptcp)
 		return -ENOMEM;
@@ -1337,6 +1355,8 @@ void mptcp_del_sock(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk), *tp_prev;
 	struct mptcp_cb *mpcb;
+
+	pr_info("mptcp_del_sock\n");
 
 	if (!tp->mptcp || !tp->mptcp->attached)
 		return;
@@ -1511,6 +1531,8 @@ static void mptcp_sub_close_doit(struct sock *sk)
 	struct sock *meta_sk = mptcp_meta_sk(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
 
+	pr_info("mptcp_sub_close_doit\n");
+
 	if (sock_flag(sk, SOCK_DEAD))
 		return;
 
@@ -1536,6 +1558,8 @@ void mptcp_sub_close_wq(struct work_struct *work)
 	struct sock *sk = (struct sock *)tp;
 	struct sock *meta_sk = mptcp_meta_sk(sk);
 
+	pr_info("mptcp_sub_close_wq\n");
+
 	mutex_lock(&tp->mpcb->mpcb_mutex);
 	lock_sock_nested(meta_sk, SINGLE_DEPTH_NESTING);
 
@@ -1550,6 +1574,8 @@ void mptcp_sub_close(struct sock *sk, unsigned long delay)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct delayed_work *work = &tcp_sk(sk)->mptcp->work;
+
+	pr_info("mptcp_sub_close\n");
 
 	/* We are already closing - e.g., call from sock_def_error_report upon
 	 * tcp_disconnect in tcp_close.
@@ -1599,6 +1625,8 @@ void mptcp_sub_force_close(struct sock *sk)
 	 */
 	int sock_is_dead = sock_flag(sk, SOCK_DEAD);
 
+	pr_info("mptcp_sub_force_close\n");
+
 	tcp_sk(sk)->mp_killed = 1;
 
 	if (sk->sk_state != TCP_CLOSE)
@@ -1616,6 +1644,8 @@ void mptcp_update_sndbuf(const struct tcp_sock *tp)
 {
 	struct sock *meta_sk = tp->meta_sk, *sk;
 	int new_sndbuf = 0, old_sndbuf = meta_sk->sk_sndbuf;
+
+	pr_info("mptcp_update_sndbuf\n");
 
 	mptcp_for_each_sk(tp->mpcb, sk) {
 		if (!mptcp_sk_can_send(sk))
@@ -1648,6 +1678,8 @@ void mptcp_close(struct sock *meta_sk, long timeout)
 	struct sk_buff *skb;
 	int data_was_unread = 0;
 	int state;
+
+	pr_info("mptcp_close\n");
 
 	mptcp_debug("%s: Close of meta_sk with tok %#x\n",
 		    __func__, mpcb->mptcp_loc_token);
@@ -1813,6 +1845,8 @@ void mptcp_disconnect(struct sock *sk)
 	struct sock *subsk, *tmpsk;
 	struct tcp_sock *tp = tcp_sk(sk);
 
+	pr_info("mptcp_disconnect\n");
+
 	__skb_queue_purge(&tp->mpcb->reinject_queue);
 
 	if (tp->inside_tk_table)
@@ -1852,6 +1886,8 @@ void mptcp_disconnect(struct sock *sk)
 /* Returns 1 if we should enable MPTCP for that socket. */
 int mptcp_doit(struct sock *sk)
 {
+	pr_info("mptcp_doit\n");
+
 	/* Don't do mptcp over loopback */
 	if (sk->sk_family == AF_INET &&
 	    (ipv4_is_loopback(inet_sk(sk)->inet_daddr) ||
@@ -1881,6 +1917,8 @@ int mptcp_create_master_sk(struct sock *meta_sk, __u64 remote_key,
 {
 	struct tcp_sock *master_tp;
 	struct sock *master_sk;
+
+	pr_info("mptcp_create_master_sk\n");
 
 	if (mptcp_alloc_mpcb(meta_sk, remote_key, mptcp_ver, window))
 		goto err_alloc_mpcb;
@@ -2147,6 +2185,8 @@ int mptcp_init_tw_sock(struct sock *sk, struct tcp_timewait_sock *tw)
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct mptcp_cb *mpcb = tp->mpcb;
 
+	pr_info("mptcp_init_tw_sock\n");
+
 	/* A subsocket in tw can only receive data. So, if we are in
 	 * infinite-receive, then we should not reply with a data-ack or act
 	 * upon general MPTCP-signaling. We prevent this by simply not creating
@@ -2296,6 +2336,8 @@ void mptcp_join_reqsk_init(const struct mptcp_cb *mpcb,
 	struct mptcp_options_received mopt;
 	u8 mptcp_hash_mac[20];
 
+	pr_info("mptcp_join_reqsk_init\n");
+
 	mptcp_init_mp_opt(&mopt);
 	tcp_parse_mptcp_options(skb, &mopt);
 
@@ -2375,6 +2417,8 @@ out:
 int mptcp_conn_request(struct sock *sk, struct sk_buff *skb)
 {
 	struct mptcp_options_received mopt;
+
+	pr_info("mptcp_conn_request\n");
 
 	mptcp_init_mp_opt(&mopt);
 	tcp_parse_mptcp_options(skb, &mopt);
@@ -2498,6 +2542,8 @@ int mptcp_get_info(const struct sock *meta_sk, char __user *optval, int optlen)
 
 	unsigned int info_len;
 
+	pr_info("mptcp_get_info\n");
+
 	if (copy_from_user(&m_info, optval, optlen))
 		return -EFAULT;
 
@@ -2606,6 +2652,8 @@ int mptcp_get_info(const struct sock *meta_sk, char __user *optval, int optlen)
 void mptcp_clear_sk(struct sock *sk, int size)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
+
+	pr_info("mptcp_clear_sk\n");
 
 	/* we do not want to clear tk_table field, because of RCU lookups */
 	sk_prot_clear_nulls(sk, offsetof(struct tcp_sock, tk_table.next));
@@ -2766,6 +2814,7 @@ static const struct file_operations mptcp_snmp_seq_fops = {
 
 static int mptcp_pm_init_net(struct net *net)
 {
+	pr_info("mptcp_pm_init_net\n");
 	net->mptcp.mptcp_statistics = alloc_percpu(struct mptcp_mib);
 	if (!net->mptcp.mptcp_statistics)
 		goto out_mptcp_mibs;
@@ -2815,6 +2864,8 @@ void __init mptcp_init(void)
 {
 	int i;
 	struct ctl_table_header *mptcp_sysctl;
+
+	pr_info("mptcp_init\n");
 
 	mptcp_sock_cache = kmem_cache_create("mptcp_sock",
 					     sizeof(struct mptcp_tcp_sock),
