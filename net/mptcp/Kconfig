@@ -100,6 +100,14 @@ config MPTCP_OPPREDUNDANT
 	  which have not exhausted their congestion window when a packet is scheduled
 	  for the first time.
 
+config MPTCP_TAGALONG
+	tristate "MPTCP Tag-along Redundant"
+	depends on (MPTCP=y)
+	---help---
+	  This is the tag-along redundant scheduler.  It sends each packet on each subflow,
+	  but when a subflow falls more than a certain number of packets behind sk_send_head
+	  it skips sending some redundant packets to catch up, ot "tag along".
+
 choice
 	prompt "Default MPTCP Scheduler"
 	default DEFAULT
@@ -131,6 +139,12 @@ choice
 		  which have not exhausted their congestion window when a packet is scheduled
 		  for the first time.
 
+	config DEFAULT_TAGALONG
+		bool "Redundant" if MPTCP_TAGALONG=y
+		---help---
+		  This is the tag-along redundant scheduler.  It sends each packet on each subflow,
+		  but when a subflow falls more than a certain number of packets behind sk_send_head
+		  it skips sending some redundant packets to catch up, ot "tag along".
 
 endchoice
 endif
@@ -142,5 +156,6 @@ config DEFAULT_MPTCP_SCHED
 	default "roundrobin" if DEFAULT_ROUNDROBIN
 	default "redundant" if DEFAULT_REDUNDANT
 	default "oppredundant" if DEFAULT_OPPREDUNDANT
+	default "tagalong" if DEFAULT_TAGALONG
 	default "default"
 
