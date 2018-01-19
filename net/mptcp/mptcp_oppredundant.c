@@ -172,50 +172,40 @@ static void oppredsched_correct_skb_pointers(struct sock *meta_sk,
 }
 
 /* Returns the next skb from the queue */
+/*
+ * skb = oppredundant_next_skb_from_queue(&meta_sk->sk_write_queue, sk_data->skb, meta_sk);
+ */
 static struct sk_buff *oppredundant_next_skb_from_queue(struct sk_buff_head *queue,
 						     struct sk_buff *previous,
 						     struct sock *meta_sk)
 {
+	/*
+	 * For oppredundant we only send redundant packets when there
+	 * are no new unsent packet waiting.
+	 */
 	pr_info("oppredundant_next_skb_from_queue\n");
 	if (skb_queue_empty(queue)) {
 		pr_info("\treturning NULL because skb_queue_empty()\n");
 		return NULL;
 	}
 
-	if (!previous) {
-		pr_info("\treturning skb_peek(queue)\n");
-		return skb_peek(queue);
+	/* check if this subflow is has already sent the tail of the queue */
+	if (previous != NULL) {
+		if (skb_queue_is_last(queue, previous)) {
+			pr_info("\treturning NULL because previous!=NULL and skb_queue_is_last()\n");
+			return NULL;
+		}
 	}
 
-	if (skb_queue_is_last(queue, previous)) {
-		pr_info("\treturning NULL because skb_queue_is_last()\n");
-		return NULL;
-	}
-
-	/* sk_data->skb stores the last scheduled packet for this subflow.
-	 * If sk_data->skb was scheduled but not sent (e.g., due to nagle),
-	 * we have to schedule it again.
-	 *
-	 * For the oppredundant scheduler, there are two cases:
-	 * 1. sk_data->skb was not sent on another subflow:
-	 *    we have to schedule it again to ensure that we do not
-	 *    skip this packet.
-	 * 2. sk_data->skb was already sent on another subflow:
-	 *    with regard to the oppredundant semantic, we have to
-	 *    schedule it again. However, we keep it simple and ignore it,
-	 *    as it was already sent by another subflow.
-	 *    This might be changed in the future.
-	 *
-	 * For case 1, send_head is equal previous, as only a single
-	 * packet can be skipped.
-	 */
-	if (tcp_send_head(meta_sk) == previous) {
+	/* whether or not previous is null, if there are unsent packets, send the next one */
+	if (tcp_send_head(meta_sk) != NULL) {
 		pr_info("\treturning tcp_send_head(meta_sk)\n");
 		return tcp_send_head(meta_sk);
 	}
 
-	pr_info("\treturning skb_queue_next(queue, previous)\n");
-	return skb_queue_next(queue, previous);
+	/* If there are no unsent packets, re-send the tail of the queue */
+	pr_info("\treturning skb_peek_tail(queue)\n");
+	return skb_peek_tail(queue);
 }
 
 static struct sk_buff *oppredundant_next_segment(struct sock *meta_sk,
@@ -273,10 +263,16 @@ static struct sk_buff *oppredundant_next_segment(struct sock *meta_sk,
 	active_valid_sks = oppredsched_get_active_valid_sks(meta_sk);
 	do {
 		struct oppredsched_sock_data *sk_data;
+		pr_info("\toppredundant_next_segment trying sock %p\n", tp);
 
 		/* Correct the skb pointers of the current subflow */
 		sk_data = oppredsched_get_sock_data(tp);
 		oppredsched_correct_skb_pointers(meta_sk, sk_data);
+
+		/* I find it weird that this does the work to pick the next skb and *then*
+		 * checks if the skb can be sent on the subflow.  Shouldn't we just check
+		 * the CWND up front before investing any work in this subflow?
+		 */
 
 		skb = oppredundant_next_skb_from_queue(&meta_sk->sk_write_queue,
 						    sk_data->skb, meta_sk);
@@ -291,6 +287,8 @@ static struct sk_buff *oppredundant_next_segment(struct sock *meta_sk,
 				*reinject = -1;
 			pr_info("\toppredundant_next_segment return sk_buff %p and sock %p\n", skb, *subsk);
 			return skb;
+		} else {
+			pr_info("\toppredundant_next_segment skipping because !skb or !use_subflow");
 		}
 
 		tp = tp->mptcp->next;
