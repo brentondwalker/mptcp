@@ -172,6 +172,56 @@ static void tagalongsched_correct_skb_pointers(struct sock *meta_sk,
 	}
 }
 
+/* Compute the number of packets between previous and the current sk_send_head,
+ * or, if sksend_head is . */
+static int tagalong_steps_behind(struct sk_buff_head *queue,
+								struct sk_buff *previous,
+								struct sock *meta_sk)
+{
+
+	struct sk_buff *send_head = tcp_send_head(meta_sk);
+	struct sk_buff *send_tail = skb_peek_tail(queue);
+
+	pr_info("tagalong_steps_behind\n");
+
+	if (skb_queue_empty(queue)) {
+		pr_info("\ttagalong_steps_behind returning 0 because skb_queue_empty()\n");
+		return 0;
+	}
+
+	if (previous != NULL) {
+		/* count how many steps we can advance previous until it
+		 * reaches either send_head or send_tail */
+		int steps = 0;
+		while (previous != send_head && previous != send_tail) {
+			pr_info("\t\ttagalong_steps_behind advancing a step...\t%p\n", previous);
+			steps ++;
+			previous = previous->next;
+		}
+		pr_info("\t\ttagalong_steps_behind finally at\t%p\n", previous);
+		if (previous == send_head) {
+			pr_info("\ttagalong_steps_behind returning %d\n",steps);
+			return steps;
+		}
+		pr_info("\ttagalong_steps_behind returning 0 because we are ahead of send_head\n");
+		return steps;
+	}
+
+	pr_info("\ttagalong_steps_behind returning -1 because previous = NULL\n");
+	return -1;
+}
+
+/* return the skb pointer advanced n steps in the queue */
+static struct sk_buff *tagalong_advance_skb(struct sk_buff *skb, int num_steps)
+{
+	int i;
+	for (i=0; i<num_steps; i++) {
+		skb = skb->next;
+	}
+	return skb;
+}
+
+
 /* Returns the next skb from the queue */
 /*
  * skb = tagalong_next_skb_from_queue(&meta_sk->sk_write_queue, sk_data->skb, meta_sk);
@@ -180,6 +230,9 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 						     struct sk_buff *previous,
 						     struct sock *meta_sk)
 {
+	int lag = 0;
+	int MAX_LAG = 1;
+
 	/*
 	 * For tagalong we only send redundant packets when there
 	 * are no new unsent packet waiting.
@@ -190,15 +243,35 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 		return NULL;
 	}
 
-	/* check if this subflow is has already sent the tail of the queue */
 	if (previous != NULL) {
+
+		/* check if this subflow is has already sent the tail of the queue */
 		if (skb_queue_is_last(queue, previous)) {
 			pr_info("\treturning NULL because previous!=NULL and skb_queue_is_last()\n");
 			return NULL;
 		}
+
+		/* if we are not at the tail, check how far back from the send_head we are */
+		lag = tagalong_steps_behind(queue, previous, meta_sk);
+
+		/* if necessary, catch up with the leading subflow */
+		if (lag > MAX_LAG) {
+			pr_info("\treturning previous advanced by %d steps\n", (lag - MAX_LAG));
+			return tagalong_advance_skb(previous, lag-MAX_LAG);
+		}
+
+		/* otherwise just send the next thing in our queue */
+		pr_info("\treturning previous->next\n");
+		return previous->next;
 	}
 
-	/* whether or not previous is null, if there are unsent packets, send the next one */
+	/* previous is null.  If there are unsent packets in the meta queue, send the next one */
+	/*
+	 * This is questionable.  If the connection is idle, and then several packets arrive,
+	 * this will lead to no redundancy at first.  Really we would like to re-send the last
+	 * packet sent - not send a new one.  But how can we tell if send_head has been sent on
+	 * another subflow or not?
+	 */
 	if (tcp_send_head(meta_sk) != NULL) {
 		pr_info("\treturning tcp_send_head(meta_sk)\n");
 		return tcp_send_head(meta_sk);
@@ -208,6 +281,7 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 	pr_info("\treturning skb_peek_tail(queue)\n");
 	return skb_peek_tail(queue);
 }
+
 
 static struct sk_buff *tagalong_next_segment(struct sock *meta_sk,
 					      int *reinject,
@@ -277,6 +351,7 @@ static struct sk_buff *tagalong_next_segment(struct sock *meta_sk,
 
 		skb = tagalong_next_skb_from_queue(&meta_sk->sk_write_queue,
 						    sk_data->skb, meta_sk);
+		pr_info("\ttagalong_next_segment tagalong_next_skb_from_queue returned %p\n", skb);
 		if (skb && tagalongsched_use_subflow(meta_sk, active_valid_sks, tp,
 						skb)) {
 			sk_data->skb = skb;
