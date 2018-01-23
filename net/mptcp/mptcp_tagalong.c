@@ -25,6 +25,13 @@
 #include <linux/module.h>
 #include <net/mptcp.h>
 
+//#define MPTCP_DEBUG
+#ifdef MPTCP_DEBUG
+#define MPTCP_LOG(...) pr_info(__VA_ARGS__)
+#else
+#define MPTCP_LOG(...)
+#endif
+
 /* Struct to store the data of a single subflow */
 struct tagalongsched_sock_data {
 	/* The skb or NULL */
@@ -60,7 +67,7 @@ static bool tagalongsched_get_active_valid_sks(struct sock *meta_sk)
 	struct sock *sk;
 	int active_valid_sks = 0;
 
-	pr_info("tagalongsched_get_active_valid_sks\n");
+	MPTCP_LOG("tagalongsched_get_active_valid_sks\n");
 	mptcp_for_each_sk(mpcb, sk) {
 		if (subflow_is_active((struct tcp_sock *)sk) &&
 		    !mptcp_is_def_unavailable(sk))
@@ -68,9 +75,9 @@ static bool tagalongsched_get_active_valid_sks(struct sock *meta_sk)
 	}
 
 	if (active_valid_sks) {
-		pr_info("\ttagalongsched_get_active_valid_sks returning active_valid_sks = TRUE\n");
+		MPTCP_LOG("\ttagalongsched_get_active_valid_sks returning active_valid_sks = TRUE\n");
 	} else {
-		pr_info("\ttagalongsched_get_active_valid_sks returning active_valid_sks = FALSE\n");
+		MPTCP_LOG("\ttagalongsched_get_active_valid_sks returning active_valid_sks = FALSE\n");
 	}
 	return active_valid_sks;
 }
@@ -80,15 +87,15 @@ static bool tagalongsched_use_subflow(struct sock *meta_sk,
 				 struct tcp_sock *tp,
 				 struct sk_buff *skb)
 {
-	pr_info("tagalongsched_use_subflow\n");
+	MPTCP_LOG("tagalongsched_use_subflow\n");
 
 	if (!skb || !mptcp_is_available((struct sock *)tp, skb, false)) {
-		pr_info("\ttagalongsched_use_subflow returning FALSE because !mptcp_is_available\n");
+		MPTCP_LOG("\ttagalongsched_use_subflow returning FALSE because !mptcp_is_available\n");
 		return false;
 	}
 
 	if (TCP_SKB_CB(skb)->path_mask != 0) {
-		pr_info("\ttagalongsched_use_subflow returning subflow_is_active(tp)\n");
+		MPTCP_LOG("\ttagalongsched_use_subflow returning subflow_is_active(tp)\n");
 		return subflow_is_active(tp);
 	}
 
@@ -97,10 +104,10 @@ static bool tagalongsched_use_subflow(struct sock *meta_sk,
 			active_valid_sks = tagalongsched_get_active_valid_sks(meta_sk);
 
 		if (subflow_is_backup(tp) && active_valid_sks > 0) {
-			pr_info("\ttagalongsched_use_subflow returning FALSE because (subflow_is_backup(tp) && active_valid_sks > 0)\n");
+			MPTCP_LOG("\ttagalongsched_use_subflow returning FALSE because (subflow_is_backup(tp) && active_valid_sks > 0)\n");
 			return false;
 		} else {
-			pr_info("\ttagalongsched_use_subflow returning TRUE because NOT (subflow_is_backup(tp) && active_valid_sks > 0)\n");
+			MPTCP_LOG("\ttagalongsched_use_subflow returning TRUE because NOT (subflow_is_backup(tp) && active_valid_sks > 0)\n");
 			return true;
 		}
 	}
@@ -119,7 +126,7 @@ static struct sock *tagalong_get_subflow(struct sock *meta_sk,
 	struct sock *sk;
 	struct tcp_sock *tp;
 
-	pr_info("tagalong_get_subflow\n");
+	MPTCP_LOG("tagalong_get_subflow\n");
 
 	/* Answer data_fin on same subflow */
 	if (meta_sk->sk_shutdown & RCV_SHUTDOWN &&
@@ -145,7 +152,7 @@ static struct sock *tagalong_get_subflow(struct sock *meta_sk,
 		if (mptcp_is_available((struct sock *)tp, skb,
 				       zero_wnd_test)) {
 			cb_data->next_subflow = tp->mptcp->next;
-			pr_info("\treturning sock %p\n", tp);
+			MPTCP_LOG("\treturning sock %p\n", tp);
 			return (struct sock *)tp;
 		}
 
@@ -164,11 +171,11 @@ static void tagalongsched_correct_skb_pointers(struct sock *meta_sk,
 {
 	struct tcp_sock *meta_tp = tcp_sk(meta_sk);
 
-	pr_info("tagalongsched_correct_skb_pointers\n");
+	MPTCP_LOG("tagalongsched_correct_skb_pointers\n");
 
 	if (sk_data->skb && !after(sk_data->skb_end_seq, meta_tp->snd_una)) {
 		sk_data->skb = NULL;
-		pr_info("\ttagalongsched_correct_skb_pointers setting sk_data->skb = NULL\n");
+		MPTCP_LOG("\ttagalongsched_correct_skb_pointers setting sk_data->skb = NULL\n");
 	}
 }
 
@@ -182,10 +189,10 @@ static int tagalong_steps_behind(struct sk_buff_head *queue,
 	struct sk_buff *send_head = tcp_send_head(meta_sk);
 	struct sk_buff *send_tail = skb_peek_tail(queue);
 
-	pr_info("tagalong_steps_behind\n");
+	MPTCP_LOG("tagalong_steps_behind\n");
 
 	if (skb_queue_empty(queue)) {
-		pr_info("\ttagalong_steps_behind returning 0 because skb_queue_empty()\n");
+		MPTCP_LOG("\ttagalong_steps_behind returning 0 because skb_queue_empty()\n");
 		return 0;
 	}
 
@@ -194,20 +201,20 @@ static int tagalong_steps_behind(struct sk_buff_head *queue,
 		 * reaches either send_head or send_tail */
 		int steps = 0;
 		while (previous != send_head && previous != send_tail) {
-			pr_info("\t\ttagalong_steps_behind advancing a step...\t%p\n", previous);
+			MPTCP_LOG("\t\ttagalong_steps_behind advancing a step...\t%p\n", previous);
 			steps ++;
 			previous = previous->next;
 		}
-		pr_info("\t\ttagalong_steps_behind finally at\t%p\n", previous);
+		MPTCP_LOG("\t\ttagalong_steps_behind finally at\t%p\n", previous);
 		if (previous == send_head) {
-			pr_info("\ttagalong_steps_behind returning %d\n",steps);
+			MPTCP_LOG("\ttagalong_steps_behind returning %d\n",steps);
 			return steps;
 		}
-		pr_info("\ttagalong_steps_behind returning 0 because we are ahead of send_head\n");
+		MPTCP_LOG("\ttagalong_steps_behind returning 0 because we are ahead of send_head\n");
 		return steps;
 	}
 
-	pr_info("\ttagalong_steps_behind returning -1 because previous = NULL\n");
+	MPTCP_LOG("\ttagalong_steps_behind returning -1 because previous = NULL\n");
 	return -1;
 }
 
@@ -237,9 +244,9 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 	 * For tagalong we only send redundant packets when there
 	 * are no new unsent packet waiting.
 	 */
-	pr_info("tagalong_next_skb_from_queue\n");
+	MPTCP_LOG("tagalong_next_skb_from_queue\n");
 	if (skb_queue_empty(queue)) {
-		pr_info("\treturning NULL because skb_queue_empty()\n");
+		MPTCP_LOG("\treturning NULL because skb_queue_empty()\n");
 		return NULL;
 	}
 
@@ -247,7 +254,7 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 
 		/* check if this subflow is has already sent the tail of the queue */
 		if (skb_queue_is_last(queue, previous)) {
-			pr_info("\treturning NULL because previous!=NULL and skb_queue_is_last()\n");
+			MPTCP_LOG("\treturning NULL because previous!=NULL and skb_queue_is_last()\n");
 			return NULL;
 		}
 
@@ -256,12 +263,12 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 
 		/* if necessary, catch up with the leading subflow */
 		if (lag > MAX_LAG) {
-			pr_info("\treturning previous advanced by %d steps\n", (lag - MAX_LAG));
+			MPTCP_LOG("\treturning previous advanced by %d steps\n", (lag - MAX_LAG));
 			return tagalong_advance_skb(previous, lag-MAX_LAG);
 		}
 
 		/* otherwise just send the next thing in our queue */
-		pr_info("\treturning previous->next\n");
+		MPTCP_LOG("\treturning previous->next\n");
 		return previous->next;
 	}
 
@@ -273,12 +280,12 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 	 * another subflow or not?
 	 */
 	if (tcp_send_head(meta_sk) != NULL) {
-		pr_info("\treturning tcp_send_head(meta_sk)\n");
+		MPTCP_LOG("\treturning tcp_send_head(meta_sk)\n");
 		return tcp_send_head(meta_sk);
 	}
 
 	/* If there are no unsent packets, re-send the tail of the queue */
-	pr_info("\treturning skb_peek_tail(queue)\n");
+	MPTCP_LOG("\treturning skb_peek_tail(queue)\n");
 	return skb_peek_tail(queue);
 }
 
@@ -296,7 +303,7 @@ static struct sk_buff *tagalong_next_segment(struct sock *meta_sk,
 	struct sk_buff *skb;
 	int active_valid_sks = -1;
 
-	pr_info("tagalong_next_segment\n");
+	MPTCP_LOG("tagalong_next_segment\n");
 
 	/* As we set it, we have to reset it as well. */
 	*limit = 0;
@@ -304,7 +311,7 @@ static struct sk_buff *tagalong_next_segment(struct sock *meta_sk,
 	if (skb_queue_empty(&mpcb->reinject_queue) &&
 	    skb_queue_empty(&meta_sk->sk_write_queue)) {
 		/* Nothing to send */
-		pr_info("\ttagalong_next_segment return NULL because skb_queue_empty()\n");
+		MPTCP_LOG("\ttagalong_next_segment return NULL because skb_queue_empty()\n");
 		return NULL;
 	}
 
@@ -313,11 +320,11 @@ static struct sk_buff *tagalong_next_segment(struct sock *meta_sk,
 	if (skb) {
 		*subsk = get_available_subflow(meta_sk, skb, false);
 		if (!*subsk) {
-			pr_info("\ttagalong_next_segment return NULL because (!*subsk)\n");
+			MPTCP_LOG("\ttagalong_next_segment return NULL because (!*subsk)\n");
 			return NULL;
 		}
 		*reinject = 1;
-		pr_info("\ttagalong_next_segment return reinject sk_buff %p and sock %p\n", skb, *subsk);
+		MPTCP_LOG("\ttagalong_next_segment return reinject sk_buff %p and sock %p\n", skb, *subsk);
 		return skb;
 	}
 
@@ -328,7 +335,7 @@ static struct sk_buff *tagalong_next_segment(struct sock *meta_sk,
 
 	/* still NULL (no subflow in connection_list?) */
 	if (!first_tp) {
-		pr_info("\ttagalong_next_segment return NULL because (!first_tp)\n");
+		MPTCP_LOG("\ttagalong_next_segment return NULL because (!first_tp)\n");
 		return NULL;
 	}
 
@@ -338,7 +345,7 @@ static struct sk_buff *tagalong_next_segment(struct sock *meta_sk,
 	active_valid_sks = tagalongsched_get_active_valid_sks(meta_sk);
 	do {
 		struct tagalongsched_sock_data *sk_data;
-		pr_info("\ttagalong_next_segment trying sock %p\n", tp);
+		MPTCP_LOG("\ttagalong_next_segment trying sock %p\n", tp);
 
 		/* Correct the skb pointers of the current subflow */
 		sk_data = tagalongsched_get_sock_data(tp);
@@ -351,7 +358,7 @@ static struct sk_buff *tagalong_next_segment(struct sock *meta_sk,
 
 		skb = tagalong_next_skb_from_queue(&meta_sk->sk_write_queue,
 						    sk_data->skb, meta_sk);
-		pr_info("\ttagalong_next_segment tagalong_next_skb_from_queue returned %p\n", skb);
+		MPTCP_LOG("\ttagalong_next_segment tagalong_next_skb_from_queue returned %p\n", skb);
 		if (skb && tagalongsched_use_subflow(meta_sk, active_valid_sks, tp,
 						skb)) {
 			sk_data->skb = skb;
@@ -361,10 +368,10 @@ static struct sk_buff *tagalong_next_segment(struct sock *meta_sk,
 
 			if (TCP_SKB_CB(skb)->path_mask)
 				*reinject = -1;
-			pr_info("\ttagalong_next_segment return sk_buff %p and sock %p\n", skb, *subsk);
+			MPTCP_LOG("\ttagalong_next_segment return sk_buff %p and sock %p\n", skb, *subsk);
 			return skb;
 		} else {
-			pr_info("\ttagalong_next_segment skipping because !skb or !use_subflow");
+			MPTCP_LOG("\ttagalong_next_segment skipping because !skb or !use_subflow");
 		}
 
 		tp = tp->mptcp->next;
@@ -373,7 +380,7 @@ static struct sk_buff *tagalong_next_segment(struct sock *meta_sk,
 	} while (tp != first_tp);
 
 	/* Nothing to send */
-	pr_info("\ttagalong_next_segment return NULL (end of function)\n");
+	MPTCP_LOG("\ttagalong_next_segment return NULL (end of function)\n");
 	return NULL;
 }
 
@@ -399,7 +406,7 @@ static struct mptcp_sched_ops mptcp_sched_tagalong = {
 
 static int __init tagalong_register(void)
 {
-	pr_info("tagalong_register\n");
+	MPTCP_LOG("tagalong_register\n");
 	BUILD_BUG_ON(sizeof(struct tagalongsched_sock_data) > MPTCP_SCHED_SIZE);
 	BUILD_BUG_ON(sizeof(struct tagalongsched_cb_data) > MPTCP_SCHED_DATA_SIZE);
 
@@ -411,7 +418,7 @@ static int __init tagalong_register(void)
 
 static void tagalong_unregister(void)
 {
-	pr_info("tagalong_unregister\n");
+	MPTCP_LOG("tagalong_unregister\n");
 	mptcp_unregister_scheduler(&mptcp_sched_tagalong);
 }
 

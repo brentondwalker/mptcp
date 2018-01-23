@@ -3,6 +3,13 @@
 #include <linux/module.h>
 #include <net/mptcp.h>
 
+//#define MPTCP_DEBUG
+#ifdef MPTCP_DEBUG
+#define MPTCP_LOG(...) pr_info(__VA_ARGS__)
+#else
+#define MPTCP_LOG(...)
+#endif
+
 static DEFINE_SPINLOCK(mptcp_sched_list_lock);
 static LIST_HEAD(mptcp_sched_list);
 
@@ -147,7 +154,7 @@ static struct sock
 	bool found_unused_una = false;
 	struct sock *sk;
 
-	pr_info("get_subflow_from_selectors\n");
+	MPTCP_LOG("get_subflow_from_selectors\n");
 	mptcp_for_each_sk(mpcb, sk) {
 		struct tcp_sock *tp = tcp_sk(sk);
 		bool unused = false;
@@ -226,7 +233,7 @@ struct sock *get_available_subflow(struct sock *meta_sk, struct sk_buff *skb,
 	struct sock *sk;
 	bool force;
 
-	pr_info("get_available_subflow\n");
+	MPTCP_LOG("get_available_subflow\n");
 	/* if there is only one subflow, bypass the scheduling function */
 	if (mpcb->cnt_subflows == 1) {
 		sk = (struct sock *)mpcb->connection_list;
@@ -276,7 +283,7 @@ static struct sk_buff *mptcp_rcv_buf_optimization(struct sock *sk, int penal)
 	struct sk_buff *skb_head;
 	struct defsched_priv *dsp = defsched_get_priv(tp);
 
-	pr_info("mptcp_rcv_buf_optimization\n");
+	MPTCP_LOG("mptcp_rcv_buf_optimization\n");
 	if (tp->mpcb->cnt_subflows == 1)
 		return NULL;
 
@@ -358,7 +365,7 @@ static struct sk_buff *__mptcp_next_segment(struct sock *meta_sk, int *reinject)
 	const struct mptcp_cb *mpcb = tcp_sk(meta_sk)->mpcb;
 	struct sk_buff *skb = NULL;
 
-	pr_info("__mptcp_next_segment\n");
+	MPTCP_LOG("__mptcp_next_segment\n");
 
 	*reinject = 0;
 
@@ -400,7 +407,7 @@ static struct sk_buff *mptcp_next_segment(struct sock *meta_sk,
 	u16 gso_max_segs;
 	u32 max_len, max_segs, window, needed;
 
-	pr_info("mptcp_next_segment\n");
+	MPTCP_LOG("mptcp_next_segment\n");
 
 	/* As we set it, we have to reset it as well. */
 	*limit = 0;
@@ -506,7 +513,7 @@ EXPORT_SYMBOL_GPL(mptcp_register_scheduler);
 
 void mptcp_unregister_scheduler(struct mptcp_sched_ops *sched)
 {
-	pr_info("mptcp_unregister_scheduler\n");
+	MPTCP_LOG("mptcp_unregister_scheduler\n");
 	spin_lock(&mptcp_sched_list_lock);
 	list_del_rcu(&sched->list);
 	spin_unlock(&mptcp_sched_list_lock);
@@ -583,7 +590,7 @@ void mptcp_init_scheduler(struct mptcp_cb *mpcb)
 	struct sock *meta_sk = mpcb->meta_sk;
 	struct tcp_sock *meta_tp = tcp_sk(meta_sk);
 
-	pr_info("mptcp_init_scheduler\n");
+	MPTCP_LOG("mptcp_init_scheduler\n");
 	rcu_read_lock();
 	/* if scheduler was set using socket option */
 	if (meta_tp->mptcp_sched_setsockopt) {
@@ -610,7 +617,7 @@ int mptcp_set_scheduler(struct sock *sk, const char *name)
 	struct mptcp_sched_ops *sched;
 	int err = 0;
 
-	pr_info("mptcp_set_scheduler\n");
+	MPTCP_LOG("mptcp_set_scheduler\n");
 	rcu_read_lock();
 	sched = __mptcp_sched_find_autoload(name);
 

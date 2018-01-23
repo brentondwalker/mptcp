@@ -20,6 +20,13 @@
 #include <linux/module.h>
 #include <net/mptcp.h>
 
+//#define MPTCP_DEBUG
+#ifdef MPTCP_DEBUG
+#define MPTCP_LOG(...) pr_info(__VA_ARGS__)
+#else
+#define MPTCP_LOG(...)
+#endif
+
 /* Struct to store the data of a single subflow */
 struct redsched_sock_data {
 	/* The skb or NULL */
@@ -55,7 +62,7 @@ static bool redsched_get_active_valid_sks(struct sock *meta_sk)
 	struct sock *sk;
 	int active_valid_sks = 0;
 
-	pr_info("redsched_get_active_valid_sks\n");
+	MPTCP_LOG("redsched_get_active_valid_sks\n");
 	mptcp_for_each_sk(mpcb, sk) {
 		if (subflow_is_active((struct tcp_sock *)sk) &&
 		    !mptcp_is_def_unavailable(sk))
@@ -63,9 +70,9 @@ static bool redsched_get_active_valid_sks(struct sock *meta_sk)
 	}
 
 	if (active_valid_sks) {
-		pr_info("\tredsched_get_active_valid_sks returning active_valid_sks = TRUE\n");
+		MPTCP_LOG("\tredsched_get_active_valid_sks returning active_valid_sks = TRUE\n");
 	} else {
-		pr_info("\tredsched_get_active_valid_sks returning active_valid_sks = FALSE\n");
+		MPTCP_LOG("\tredsched_get_active_valid_sks returning active_valid_sks = FALSE\n");
 	}
 	return active_valid_sks;
 }
@@ -75,15 +82,15 @@ static bool redsched_use_subflow(struct sock *meta_sk,
 				 struct tcp_sock *tp,
 				 struct sk_buff *skb)
 {
-	pr_info("redsched_use_subflow\n");
+	MPTCP_LOG("redsched_use_subflow\n");
 
 	if (!skb || !mptcp_is_available((struct sock *)tp, skb, false)) {
-		pr_info("\tredsched_use_subflow returning FALSE because !mptcp_is_available\n");
+		MPTCP_LOG("\tredsched_use_subflow returning FALSE because !mptcp_is_available\n");
 		return false;
 	}
 
 	if (TCP_SKB_CB(skb)->path_mask != 0) {
-		pr_info("\tredsched_use_subflow returning subflow_is_active(tp)\n");
+		MPTCP_LOG("\tredsched_use_subflow returning subflow_is_active(tp)\n");
 		return subflow_is_active(tp);
 	}
 
@@ -92,10 +99,10 @@ static bool redsched_use_subflow(struct sock *meta_sk,
 			active_valid_sks = redsched_get_active_valid_sks(meta_sk);
 
 		if (subflow_is_backup(tp) && active_valid_sks > 0) {
-			pr_info("\tredsched_use_subflow returning FALSE because (subflow_is_backup(tp) && active_valid_sks > 0)\n");
+			MPTCP_LOG("\tredsched_use_subflow returning FALSE because (subflow_is_backup(tp) && active_valid_sks > 0)\n");
 			return false;
 		} else {
-			pr_info("\tredsched_use_subflow returning TRUE because NOT (subflow_is_backup(tp) && active_valid_sks > 0)\n");
+			MPTCP_LOG("\tredsched_use_subflow returning TRUE because NOT (subflow_is_backup(tp) && active_valid_sks > 0)\n");
 			return true;
 		}
 	}
@@ -114,7 +121,7 @@ static struct sock *redundant_get_subflow(struct sock *meta_sk,
 	struct sock *sk;
 	struct tcp_sock *tp;
 
-	pr_info("redundant_get_subflow\n");
+	MPTCP_LOG("redundant_get_subflow\n");
 
 	/* Answer data_fin on same subflow */
 	if (meta_sk->sk_shutdown & RCV_SHUTDOWN &&
@@ -140,7 +147,7 @@ static struct sock *redundant_get_subflow(struct sock *meta_sk,
 		if (mptcp_is_available((struct sock *)tp, skb,
 				       zero_wnd_test)) {
 			cb_data->next_subflow = tp->mptcp->next;
-			pr_info("\treturning sock %p\n", tp);
+			MPTCP_LOG("\treturning sock %p\n", tp);
 			return (struct sock *)tp;
 		}
 
@@ -159,11 +166,11 @@ static void redsched_correct_skb_pointers(struct sock *meta_sk,
 {
 	struct tcp_sock *meta_tp = tcp_sk(meta_sk);
 
-	pr_info("redsched_correct_skb_pointers\n");
+	MPTCP_LOG("redsched_correct_skb_pointers\n");
 
 	if (sk_data->skb && !after(sk_data->skb_end_seq, meta_tp->snd_una)) {
 		sk_data->skb = NULL;
-		pr_info("\tredsched_correct_skb_pointers setting sk_data->skb = NULL\n");
+		MPTCP_LOG("\tredsched_correct_skb_pointers setting sk_data->skb = NULL\n");
 	}
 }
 
@@ -172,19 +179,19 @@ static struct sk_buff *redundant_next_skb_from_queue(struct sk_buff_head *queue,
 						     struct sk_buff *previous,
 						     struct sock *meta_sk)
 {
-	pr_info("redundant_next_skb_from_queue\n");
+	MPTCP_LOG("redundant_next_skb_from_queue\n");
 	if (skb_queue_empty(queue)) {
-		pr_info("\treturning NULL because skb_queue_empty()\n");
+		MPTCP_LOG("\treturning NULL because skb_queue_empty()\n");
 		return NULL;
 	}
 
 	if (!previous) {
-		pr_info("\treturning skb_peek(queue)\n");
+		MPTCP_LOG("\treturning skb_peek(queue)\n");
 		return skb_peek(queue);
 	}
 
 	if (skb_queue_is_last(queue, previous)) {
-		pr_info("\treturning NULL because skb_queue_is_last()\n");
+		MPTCP_LOG("\treturning NULL because skb_queue_is_last()\n");
 		return NULL;
 	}
 
@@ -206,11 +213,11 @@ static struct sk_buff *redundant_next_skb_from_queue(struct sk_buff_head *queue,
 	 * packet can be skipped.
 	 */
 	if (tcp_send_head(meta_sk) == previous) {
-		pr_info("\treturning tcp_send_head(meta_sk)\n");
+		MPTCP_LOG("\treturning tcp_send_head(meta_sk)\n");
 		return tcp_send_head(meta_sk);
 	}
 
-	pr_info("\treturning skb_queue_next(queue, previous)\n");
+	MPTCP_LOG("\treturning skb_queue_next(queue, previous)\n");
 	return skb_queue_next(queue, previous);
 }
 
@@ -227,7 +234,7 @@ static struct sk_buff *redundant_next_segment(struct sock *meta_sk,
 	struct sk_buff *skb;
 	int active_valid_sks = -1;
 
-	pr_info("redundant_next_segment\n");
+	MPTCP_LOG("redundant_next_segment\n");
 
 	/* As we set it, we have to reset it as well. */
 	*limit = 0;
@@ -235,7 +242,7 @@ static struct sk_buff *redundant_next_segment(struct sock *meta_sk,
 	if (skb_queue_empty(&mpcb->reinject_queue) &&
 	    skb_queue_empty(&meta_sk->sk_write_queue)) {
 		/* Nothing to send */
-		pr_info("\tredundant_next_segment return NULL because skb_queue_empty()\n");
+		MPTCP_LOG("\tredundant_next_segment return NULL because skb_queue_empty()\n");
 		return NULL;
 	}
 
@@ -244,11 +251,11 @@ static struct sk_buff *redundant_next_segment(struct sock *meta_sk,
 	if (skb) {
 		*subsk = get_available_subflow(meta_sk, skb, false);
 		if (!*subsk) {
-			pr_info("\tredundant_next_segment return NULL because (!*subsk)\n");
+			MPTCP_LOG("\tredundant_next_segment return NULL because (!*subsk)\n");
 			return NULL;
 		}
 		*reinject = 1;
-		pr_info("\tredundant_next_segment return reinject sk_buff %p and sock %p\n", skb, *subsk);
+		MPTCP_LOG("\tredundant_next_segment return reinject sk_buff %p and sock %p\n", skb, *subsk);
 		return skb;
 	}
 
@@ -259,7 +266,7 @@ static struct sk_buff *redundant_next_segment(struct sock *meta_sk,
 
 	/* still NULL (no subflow in connection_list?) */
 	if (!first_tp) {
-		pr_info("\tredundant_next_segment return NULL because (!first_tp)\n");
+		MPTCP_LOG("\tredundant_next_segment return NULL because (!first_tp)\n");
 		return NULL;
 	}
 
@@ -285,7 +292,7 @@ static struct sk_buff *redundant_next_segment(struct sock *meta_sk,
 
 			if (TCP_SKB_CB(skb)->path_mask)
 				*reinject = -1;
-			pr_info("\tredundant_next_segment return sk_buff %p and sock %p\n", skb, *subsk);
+			MPTCP_LOG("\tredundant_next_segment return sk_buff %p and sock %p\n", skb, *subsk);
 			return skb;
 		}
 
@@ -295,7 +302,7 @@ static struct sk_buff *redundant_next_segment(struct sock *meta_sk,
 	} while (tp != first_tp);
 
 	/* Nothing to send */
-	pr_info("\tredundant_next_segment return NULL (end of function)\n");
+	MPTCP_LOG("\tredundant_next_segment return NULL (end of function)\n");
 	return NULL;
 }
 
@@ -321,7 +328,7 @@ static struct mptcp_sched_ops mptcp_sched_redundant = {
 
 static int __init redundant_register(void)
 {
-	pr_info("redundant_register\n");
+	MPTCP_LOG("redundant_register\n");
 	BUILD_BUG_ON(sizeof(struct redsched_sock_data) > MPTCP_SCHED_SIZE);
 	BUILD_BUG_ON(sizeof(struct redsched_cb_data) > MPTCP_SCHED_DATA_SIZE);
 
@@ -333,7 +340,7 @@ static int __init redundant_register(void)
 
 static void redundant_unregister(void)
 {
-	pr_info("redundant_unregister\n");
+	MPTCP_LOG("redundant_unregister\n");
 	mptcp_unregister_scheduler(&mptcp_sched_redundant);
 }
 
