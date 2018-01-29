@@ -659,6 +659,7 @@ extern int sysctl_mptcp_version;
 extern int sysctl_mptcp_checksum;
 extern int sysctl_mptcp_debug;
 extern int sysctl_mptcp_syn_retries;
+extern int sysctl_mptcp_maxlag;
 
 extern struct workqueue_struct *mptcp_wq;
 

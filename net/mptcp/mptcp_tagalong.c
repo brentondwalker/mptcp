@@ -238,7 +238,7 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 						     struct sock *meta_sk)
 {
 	int lag = 0;
-	int MAX_LAG = 1;
+	int MAX_LAG = sysctl_mptcp_maxlag;
 
 	/*
 	 * For tagalong we only send redundant packets when there
@@ -252,9 +252,11 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 
 	if (previous != NULL) {
 
+		MPTCP_LOG("\t\tprevious != NULL\n");
+
 		/* check if this subflow is has already sent the tail of the queue */
 		if (skb_queue_is_last(queue, previous)) {
-			MPTCP_LOG("\treturning NULL because previous!=NULL and skb_queue_is_last()\n");
+			MPTCP_LOG("\t\treturning NULL because previous!=NULL and skb_queue_is_last()\n");
 			return NULL;
 		}
 
@@ -263,12 +265,12 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 
 		/* if necessary, catch up with the leading subflow */
 		if (lag > MAX_LAG) {
-			MPTCP_LOG("\treturning previous advanced by %d steps\n", (lag - MAX_LAG));
+			MPTCP_LOG("\t\treturning previous advanced by %d steps\n", (lag - MAX_LAG));
 			return tagalong_advance_skb(previous, lag-MAX_LAG);
 		}
 
 		/* otherwise just send the next thing in our queue */
-		MPTCP_LOG("\treturning previous->next\n");
+		MPTCP_LOG("\t\treturning previous->next\n");
 		return previous->next;
 	}
 
@@ -278,14 +280,42 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 	 * this will lead to no redundancy at first.  Really we would like to re-send the last
 	 * packet sent - not send a new one.  But how can we tell if send_head has been sent on
 	 * another subflow or not?
+	 * It is also a problem when there are losses on the subflow.  The CWND is small and it ends
+	 * up waiting for ACKs.  Then when it's time to send a new packet, previous is null.
+	 *
+	 * Here's some reasoning:  If previous is null, but send_head->prev is not, then someone
+	 * else must have sent send_head->prev.  We can start at send_head->prev and backtrack
+	 * for the appropriate lag, knowing that we haven't sent any of the packets in the
+	 * current meta queue.
 	 */
+	MPTCP_LOG("\t\tprevious != NULL\n");
 	if (tcp_send_head(meta_sk) != NULL) {
-		MPTCP_LOG("\treturning tcp_send_head(meta_sk)\n");
-		return tcp_send_head(meta_sk);
+		int i = 0;
+		struct sk_buff *skb = tcp_send_head(meta_sk);
+
+		MPTCP_LOG("\t\ttcp_send_head(meta_sk) != NULL\n");
+
+		if (tcp_send_head(meta_sk)->prev == (const struct sk_buff *) queue) {
+			/* There are no un-ACKed packets before the current send_head.
+			 * Everything in flight has been ACKed.  Send a new packet.
+			 * This case is superflous given the code below.  Should remove it. */
+			MPTCP_LOG("\t\treturning tcp_send_head(meta_sk)\n");
+			return tcp_send_head(meta_sk);
+		}
+
+		/* There are packets that were sent on another link but not yet ACKed.
+		 * Backtrack by the appropriate possible lag and re-send one of them. */
+		while (i < MAX_LAG && skb->prev != (const struct sk_buff *) queue) {
+			i++;
+			skb = skb->prev;
+		}
+		MPTCP_LOG("\t\treturning backtracked %d steps from tcp_send_head(meta_sk)\n",i);
+		return skb;
 	}
 
-	/* If there are no unsent packets, re-send the tail of the queue */
-	MPTCP_LOG("\treturning skb_peek_tail(queue)\n");
+	/* If there are no unsent packets, re-send the tail of the queue.
+	 * If we get here the tail should actually be null. */
+	MPTCP_LOG("\t\treturning skb_peek_tail(queue)\n");
 	return skb_peek_tail(queue);
 }
 
@@ -304,6 +334,7 @@ static struct sk_buff *tagalong_next_segment(struct sock *meta_sk,
 	int active_valid_sks = -1;
 
 	MPTCP_LOG("tagalong_next_segment\n");
+	MPTCP_LOG("\tstarting with first_tp=%p\n",first_tp);
 
 	/* As we set it, we have to reset it as well. */
 	*limit = 0;
@@ -330,8 +361,10 @@ static struct sk_buff *tagalong_next_segment(struct sock *meta_sk,
 
 	/* Then try indistinctly redundant and normal skbs */
 
-	if (!first_tp)
+	if (!first_tp) {
 		first_tp = mpcb->connection_list;
+		MPTCP_LOG("\tfirst_tp undefined.  setting first_tp = mpcb->connection_list=%p\n",first_tp);
+	}
 
 	/* still NULL (no subflow in connection_list?) */
 	if (!first_tp) {
@@ -364,6 +397,7 @@ static struct sk_buff *tagalong_next_segment(struct sock *meta_sk,
 			sk_data->skb = skb;
 			sk_data->skb_end_seq = TCP_SKB_CB(skb)->end_seq;
 			cb_data->next_subflow = tp->mptcp->next;
+			MPTCP_LOG("\t\tfirst_tp setting cb_data->next_subflow=%p\n",cb_data->next_subflow);
 			*subsk = (struct sock *)tp;
 
 			if (TCP_SKB_CB(skb)->path_mask)
