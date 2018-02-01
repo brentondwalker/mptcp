@@ -211,7 +211,7 @@ static int tagalong_steps_behind(struct sk_buff_head *queue,
 			return steps;
 		}
 		MPTCP_LOG("\ttagalong_steps_behind returning 0 because we are ahead of send_head\n");
-		return steps;
+		return 0;
 	}
 
 	MPTCP_LOG("\ttagalong_steps_behind returning -1 because previous = NULL\n");
@@ -262,6 +262,12 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 
 		/* if we are not at the tail, check how far back from the send_head we are */
 		lag = tagalong_steps_behind(queue, previous, meta_sk);
+
+		/* If lag==0 then previous==send_head and we need to try sending send_head again */
+		if (lag == 0) {
+			MPTCP_LOG("\t\treturning previous because lag==0  %p  %p\n",previous,tcp_send_head(meta_sk));
+			return previous;
+		}
 
 		/* if necessary, catch up with the leading subflow */
 		if (lag > MAX_LAG) {
