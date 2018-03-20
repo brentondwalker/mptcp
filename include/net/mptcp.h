@@ -186,7 +186,8 @@ struct mptcp_tcp_sock {
 	u8	loc_id;
 	u8	rem_id;
 
-#define MPTCP_SCHED_SIZE 16
+//#define MPTCP_SCHED_SIZE 16
+#define MPTCP_SCHED_SIZE 40
 	u8	mptcp_sched[MPTCP_SCHED_SIZE] __aligned(8);
 
 	int	init_rcv_wnd;
@@ -428,6 +429,7 @@ struct mptcp_cb {
 /* Max number of fastclose retransmissions */
 #define MPTCP_FASTCLOSE_RETRIES 3
 
+#define CONFIG_MPTCP 1
 #ifdef CONFIG_MPTCP
 
 /* Used for checking if the mptcp initialization has been successful */
