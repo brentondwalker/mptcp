@@ -50,6 +50,7 @@ static bool mptcp_is_temp_unavailable(struct sock *sk,
 	const struct tcp_sock *tp = tcp_sk(sk);
 	unsigned int mss_now, space, in_flight;
 
+	MPTCP_LOG("\t\tmptcp_is_temp_unavailable\n");
 	if (inet_csk(sk)->icsk_ca_state == TCP_CA_Loss) {
 		/* If SACK is disabled, and we got a loss, TCP does not exit
 		 * the loss-state until something above high_seq has been
@@ -59,6 +60,7 @@ static bool mptcp_is_temp_unavailable(struct sock *sk,
 		 * as we have an RTO, we won't push data on the subflow.
 		 * Thus, snd_una can never go beyond high_seq.
 		 */
+		MPTCP_LOG("\t\t\tSACK is enabled\n");
 		if (!tcp_is_reno(tp))
 			return true;
 		else if (tp->snd_una != tp->high_seq)
@@ -68,31 +70,41 @@ static bool mptcp_is_temp_unavailable(struct sock *sk,
 	if (!tp->mptcp->fully_established) {
 		/* Make sure that we send in-order data */
 		if (skb && tp->mptcp->second_packet &&
-		    tp->mptcp->last_end_data_seq != TCP_SKB_CB(skb)->seq)
+		    tp->mptcp->last_end_data_seq != TCP_SKB_CB(skb)->seq) {
+			MPTCP_LOG("\t\t\tnot fully established?\n");
 			return true;
+		}
 	}
 
 	/* If TSQ is already throttling us, do not send on this subflow. When
 	 * TSQ gets cleared the subflow becomes eligible again.
 	 */
-	if (test_bit(TSQ_THROTTLED, &tp->tsq_flags))
+	if (test_bit(TSQ_THROTTLED, &tp->tsq_flags)) {
+		MPTCP_LOG("\t\t\tTSQ_THROTTLED\n");
 		return true;
+	}
 
 	in_flight = tcp_packets_in_flight(tp);
 	/* Not even a single spot in the cwnd */
-	if (in_flight >= tp->snd_cwnd)
+	if (in_flight >= tp->snd_cwnd) {
+		MPTCP_LOG("\t\t\tCWND\n");
 		return true;
+	}
 
 	/* Now, check if what is queued in the subflow's send-queue
 	 * already fills the cwnd.
 	 */
 	space = (tp->snd_cwnd - in_flight) * tp->mss_cache;
 
-	if (tp->write_seq - tp->snd_nxt > space)
+	if (tp->write_seq - tp->snd_nxt > space) {
+		MPTCP_LOG("\t\t\tqueue fills CWND\n");
 		return true;
+	}
 
-	if (zero_wnd_test && !before(tp->write_seq, tcp_wnd_end(tp)))
+	if (zero_wnd_test && !before(tp->write_seq, tcp_wnd_end(tp))) {
+		MPTCP_LOG("\t\t\tzero_wnd_test\n");
 		return true;
+	}
 
 	mss_now = tcp_current_mss(sk);
 
@@ -102,9 +114,12 @@ static bool mptcp_is_temp_unavailable(struct sock *sk,
 	 * the meta-level).
 	 */
 	if (skb && !zero_wnd_test &&
-	    after(tp->write_seq + min(skb->len, mss_now), tcp_wnd_end(tp)))
+	    after(tp->write_seq + min(skb->len, mss_now), tcp_wnd_end(tp))) {
+		MPTCP_LOG("\t\t\tbefore/after issues\n");
 		return true;
+	}
 
+	MPTCP_LOG("\t\t\treturning false\n");
 	return false;
 }
 
@@ -112,6 +127,13 @@ static bool mptcp_is_temp_unavailable(struct sock *sk,
 bool mptcp_is_available(struct sock *sk, const struct sk_buff *skb,
 			bool zero_wnd_test)
 {
+	MPTCP_LOG("mptcp_is_available(%p , %p)",sk, skb);
+	if (mptcp_is_def_unavailable(sk)) {
+		MPTCP_LOG("\t\tmptcp_is_def_unavailable(sk) = TRUE");
+	} else {
+		MPTCP_LOG("\t\tmptcp_is_def_unavailable(sk) = FALSE");
+	}
+
 	return !mptcp_is_def_unavailable(sk) &&
 	       !mptcp_is_temp_unavailable(sk, skb, zero_wnd_test);
 }

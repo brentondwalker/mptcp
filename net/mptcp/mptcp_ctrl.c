@@ -72,6 +72,8 @@ static struct kmem_cache *mptcp_tw_cache __read_mostly;
 
 int sysctl_mptcp_enabled __read_mostly = 1;
 int sysctl_mptcp_version __read_mostly = 0;
+int sysctl_mptcp_maxlag __read_mostly = 1;
+EXPORT_SYMBOL(sysctl_mptcp_maxlag);
 static int min_mptcp_version;
 static int max_mptcp_version = 1;
 int sysctl_mptcp_checksum __read_mostly = 1;
@@ -175,6 +177,13 @@ static struct ctl_table mptcp_table[] = {
 		.mode		= 0644,
 		.maxlen		= MPTCP_SCHED_NAME_MAX,
 		.proc_handler	= proc_mptcp_scheduler,
+	},
+	{
+		.procname	= "mptcp_maxlag",
+		.data = &sysctl_mptcp_maxlag,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec
 	},
 	{ }
 };

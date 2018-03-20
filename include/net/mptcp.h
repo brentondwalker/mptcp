@@ -428,6 +428,7 @@ struct mptcp_cb {
 /* Max number of fastclose retransmissions */
 #define MPTCP_FASTCLOSE_RETRIES 3
 
+#define CONFIG_MPTCP 1
 #ifdef CONFIG_MPTCP
 
 /* Used for checking if the mptcp initialization has been successful */
@@ -659,6 +660,7 @@ extern int sysctl_mptcp_version;
 extern int sysctl_mptcp_checksum;
 extern int sysctl_mptcp_debug;
 extern int sysctl_mptcp_syn_retries;
+extern int sysctl_mptcp_maxlag;
 
 extern struct workqueue_struct *mptcp_wq;
 
