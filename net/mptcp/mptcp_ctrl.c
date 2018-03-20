@@ -59,7 +59,7 @@
 #include <linux/atomic.h>
 #include <linux/sysctl.h>
 
-#define MPTCP_DEBUG
+//#define MPTCP_DEBUG
 #ifdef MPTCP_DEBUG
 #define MPTCP_LOG(...) pr_info(__VA_ARGS__)
 #else
