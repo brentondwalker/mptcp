@@ -27,18 +27,25 @@ bool mptcp_is_def_unavailable(struct sock *sk)
 	const struct tcp_sock *tp = tcp_sk(sk);
 
 	/* Set of states for which we are allowed to send data */
-	if (!mptcp_sk_can_send(sk))
+	if (!mptcp_sk_can_send(sk)) {
+		MPTCP_LOG("\t\tmptcp_is_def_unavailable: !mptcp_sk_can_send(sk)\n");
 		return true;
+	}
 
 	/* We do not send data on this subflow unless it is
 	 * fully established, i.e. the 4th ack has been received.
 	 */
-	if (tp->mptcp->pre_established)
+	if (tp->mptcp->pre_established) {
+		MPTCP_LOG("\t\tmptcp_is_def_unavailable: tp->mptcp->pre_established\n");
 		return true;
+	}
 
-	if (tp->pf)
+	if (tp->pf) {
+		MPTCP_LOG("\t\tmptcp_is_def_unavailable: tp->pf\n");
 		return true;
+	}
 
+	MPTCP_LOG("\t\tmptcp_is_def_unavailable: returning false\n");
 	return false;
 }
 EXPORT_SYMBOL_GPL(mptcp_is_def_unavailable);

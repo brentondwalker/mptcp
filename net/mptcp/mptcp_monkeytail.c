@@ -20,7 +20,7 @@
 #include <linux/module.h>
 #include <net/mptcp.h>
 
-//#define MPTCP_DEBUG
+#define MPTCP_DEBUG
 #ifdef MPTCP_DEBUG
 #define MPTCP_LOG(...) pr_info(__VA_ARGS__)
 #else
@@ -192,9 +192,12 @@ static void monkeytailsched_correct_skb_pointers(struct sock *meta_sk,
 		sk_data->monkeyhead_skb = NULL;
 		MPTCP_LOG("\tmonkeytailsched_correct_skb_pointers setting sk_data->monkeyhead_skb = NULL\n");
 	}
-	if (sk_data->monkeytail_skb && !after(sk_data->monkeytail_skb_end_seq, meta_tp->snd_una)) {
-		sk_data->monkeytail_skb = NULL;
-		MPTCP_LOG("\tmonkeytailsched_correct_skb_pointers setting sk_data->monkeytail_skb = NULL\n");
+	if (! sk_data->monkeytail_synced) {
+		MPTCP_LOG("\tmonkeytailsched_correct_skb_pointers ! sk_data->monkeytail_synced\n");
+		if (sk_data->monkeytail_skb && !after(sk_data->monkeytail_skb_end_seq, meta_tp->snd_una)) {
+			sk_data->monkeytail_skb = NULL;
+			MPTCP_LOG("\tmonkeytailsched_correct_skb_pointers setting sk_data->monkeytail_skb = NULL\n");
+		}
 	}
 }
 
@@ -260,6 +263,10 @@ static struct sk_buff *monkeytail_advance_skb(struct sk_buff *skb, int num_steps
  * up with monkeyead.  Generally, if this function returns NULL, you should
  * call monkeytail_next_skb_from_monkeyhead() afterward because there may
  * still be packets up these to send.
+ *
+ * Should not call this unless (!sk_data->monkeytail_synced) because the
+ * necessary fields in sk_data may not be set.  But if you do, it will
+ * catch it and just return NULL.
  */
 /*
  * skb = monkeytail_next_skb_from_queue(&meta_sk->sk_write_queue, sk_data->skb, meta_sk);
@@ -272,8 +279,21 @@ static struct sk_buff *monkeytail_next_skb_from_monkeytail(struct sk_buff_head *
 	struct sk_buff *skb;
 
 	MPTCP_LOG("monkeytail_next_skb_from_monkeytail\n");
+
+	/* this function will only work if monkeyhead and monkeytail are out of sync */
+	if (sk_data->monkeytail_synced) {
+		MPTCP_LOG("\t\treturning NULL because monkeytail_synced\n");
+		return NULL;
+	}
+
+	if (sk_data->monkeytail_skb == sk_data->monkeyhead_skb) {
+		MPTCP_LOG("\t\treturning NULL because monkeytail_skb == monkeyhead_skb\n");
+		sk_data->monkeytail_synced = true;
+		return NULL;
+	}
+
 	if (skb_queue_empty(queue)) {
-		MPTCP_LOG("\treturning NULL because skb_queue_empty()\n");
+		MPTCP_LOG("\t\treturning NULL because skb_queue_empty()\n");
 		return NULL;
 	}
 
@@ -283,27 +303,28 @@ static struct sk_buff *monkeytail_next_skb_from_monkeytail(struct sk_buff_head *
 		/* The previous tail packet disappeared, presumably because it was ACKed. */
 		/* Check if the new sk_buff_head has caught up with the monkeyhead */
 		skb = skb_peek(queue);
-		MPTCP_LOG("\t\tprevious monkeytail = NULL\n");
-		if (! before(TCP_SKB_CB(skb)->end_seq, sk_data->monkeyhead_last_jump_seq)
-				|| ! before(TCP_SKB_CB(skb)->end_seq, TCP_SKB_CB(sk_data->monkeyhead_skb)->end_seq)) {
-			MPTCP_LOG("\t\t\tmonkeytail has caught up with most recent jump\n");
-			sk_data->monkeytail_synced = true;
-			// return = service the head
-			return NULL;
+		if (skb) {
+			MPTCP_LOG("\t\tprevious monkeytail = NULL\n");
+			if (! before(TCP_SKB_CB(skb)->end_seq, sk_data->monkeyhead_last_jump_seq)
+					|| ! before(TCP_SKB_CB(skb)->end_seq, TCP_SKB_CB(sk_data->monkeyhead_skb)->end_seq)) {
+				MPTCP_LOG("\t\t\tmonkeytail has caught up with most recent jump\n");
+				sk_data->monkeytail_synced = true;
+				// return = service the head
+				return NULL;
+			}
 		}
 		return skb;
 	}
 
-	/* this should never happen, but check if monkeytail==monkeyhead */
-	if (sk_data->monkeytail_skb == sk_data->monkeyhead_skb) {
-		MPTCP_LOG("\t\tmonkeytail==monkeyhead\n");
+	/* if the last packet sent was the last in the queue, we are synced */
+	if (skb_queue_is_last(queue, previous)) {
+		MPTCP_LOG("\t\treturning NULL because skb_queue_is_last()\n");
 		sk_data->monkeytail_synced = true;
-		// service the head as normal
 		return NULL;
 	}
 
 	/* check if the tail has caught up to the most recent jump */
-	if (previous->next != NULL) {
+	if (previous->next != NULL) { //XXX use skb_peek here?
 		if (!before(TCP_SKB_CB(previous->next)->end_seq , sk_data->monkeyhead_last_jump_seq)) {
 			MPTCP_LOG("\t\tmonkeytail has caught up with most recent jump\n");
 			sk_data->monkeytail_synced = true;
@@ -312,13 +333,7 @@ static struct sk_buff *monkeytail_next_skb_from_monkeytail(struct sk_buff_head *
 		}
 	}
 
-	/* for this case to happen the case above should have caught it */
-	if (skb_queue_is_last(queue, previous)) {
-		MPTCP_LOG("\treturning NULL because skb_queue_is_last()\n");
-		return NULL;
-	}
-
-	/* this also should never happen */
+	/* this also should never (ever ever ever) happen */
 	if (tcp_send_head(meta_sk) == previous) {
 		MPTCP_LOG("\treturning tcp_send_head(meta_sk)\n");
 		return tcp_send_head(meta_sk);
@@ -349,6 +364,7 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
 {
 	int lag = 0;
 	int MAX_LAG = sysctl_mptcp_maxlag;
+	struct sk_buff *previous;
 
 	/*
 	 * For monkeytail we only send redundant packets when there
@@ -360,7 +376,7 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
 		return NULL;
 	}
 
-	struct sk_buff *previous = sk_data->monkeyhead_skb;
+	previous = sk_data->monkeyhead_skb;
 	*monkeyhead_jumped = false;
 
 	if (!previous) {
@@ -392,7 +408,8 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
 			if (skb->prev != (const struct sk_buff *) queue) {
 				sk_data->monkeytail_synced = false;
 				/* this isn't strictly necessary, but it seems like the organized thing to do. */
-				sk_data->monkeytail_skb = queue->next;
+				sk_data->monkeytail_skb = skb_peek(queue);
+				sk_data->monkeytail_skb_end_seq = TCP_SKB_CB(sk_data->monkeytail_skb)->end_seq - 1; //XXX may need to subtract a little from this seq number
 			}
 			*monkeyhead_jumped = true;
 			MPTCP_LOG("\t\treturning backtracked %d steps from tcp_send_head(meta_sk)\n",i);
@@ -405,6 +422,8 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
 		return skb_peek_tail(queue);
 	}
 
+	MPTCP_LOG("\t\tprevious != NULL\n");
+
 	/* check if this subflow is has already sent the tail of the queue */
 	if (skb_queue_is_last(queue, previous)) {
 		MPTCP_LOG("\t\treturning NULL because previous!=NULL and skb_queue_is_last()\n");
@@ -413,6 +432,7 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
 
 	/* if we are not at the tail, check how far back from the send_head we are */
 	lag = monkeytail_steps_behind(queue, previous, meta_sk);
+	MPTCP_LOG("\t\tcomputed lag=%d\n",lag);
 
 	/* If lag==0 then previous==send_head and we need to try sending send_head again */
 	if (lag == 0) {
@@ -428,6 +448,7 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
 		if (sk_data->monkeytail_synced) {
 			sk_data->monkeytail_synced = false;
 			sk_data->monkeytail_skb = previous;
+			sk_data->monkeytail_skb_end_seq = sk_data->monkeyhead_skb_end_seq;
 		}
 		*monkeyhead_jumped = true;
 		return monkeytail_advance_skb(previous, lag-MAX_LAG);
@@ -532,6 +553,9 @@ static struct sk_buff *monkeytail_next_segment(struct sock *meta_sk,
 
 		skb = NULL;
 		packet_from_monkeytail = false;
+		MPTCP_LOG("\ttry to get an sk_buff from the queue\n");
+		MPTCP_LOG("\tsk_data->monkeytail_synced = %d\n", sk_data->monkeytail_synced);
+		MPTCP_LOG("\tsk_data->monkeytail_service_counter = %d\n", sk_data->monkeytail_service_counter);
 		if (sk_data->monkeytail_synced) {
 			/* if monkeyhead and monkeytail are synced, just service the head */
 			skb = monkeytail_next_skb_from_monkeyhead(&meta_sk->sk_write_queue, sk_data, meta_sk, &monkeyhead_jumped);
@@ -557,12 +581,24 @@ static struct sk_buff *monkeytail_next_segment(struct sock *meta_sk,
 		MPTCP_LOG("\tmonkeytail_next_segment monkeytail_next_skb_from_queue returned %p\n", skb);
 
 		if (skb && monkeytailsched_use_subflow(meta_sk, active_valid_sks, tp, skb)) {
+			MPTCP_LOG("\t\tmonkeytailsched_use_subflow is true!\n");
 			if (packet_from_monkeytail) {
+				MPTCP_LOG("\t\tpacket_from_monkeytail\n");
 				sk_data->monkeytail_skb = skb;
 				sk_data->monkeytail_skb_end_seq = TCP_SKB_CB(skb)->end_seq;
 			} else {
+				MPTCP_LOG("\t\tNOT packet_from_monkeytail\n");
 				if (monkeyhead_jumped) {
-					sk_data->monkeyhead_last_jump_seq = TCP_SKB_CB(sk_data->monkeyhead_skb)->end_seq;
+					MPTCP_LOG("\t\tmonkeyhead_jumped!\n");
+					/* record the place where we jumped from */
+					if (sk_data->monkeyhead_skb) {
+						MPTCP_LOG("\t\tsk_data->monkeyhead_skb not NULL\n");
+						sk_data->monkeyhead_last_jump_seq = TCP_SKB_CB(sk_data->monkeyhead_skb)->end_seq;
+					} else {
+						MPTCP_LOG("\t\tsk_data->monkeyhead_skb == NULL\n");
+						sk_data->monkeyhead_last_jump_seq = TCP_SKB_CB(skb)->end_seq; //XXX should set it to something before this
+					}
+					MPTCP_LOG("\t\tmonkeyhead_last_jump_seq = %d\n",sk_data->monkeyhead_last_jump_seq);
 				}
 				sk_data->monkeyhead_skb = skb;
 				sk_data->monkeyhead_skb_end_seq = TCP_SKB_CB(skb)->end_seq;
