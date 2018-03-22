@@ -27,7 +27,7 @@
 #define MPTCP_LOG(...)
 #endif
 
-#define TAIL_SERVICE_INTERVAL 2
+//#define TAIL_SERVICE_INTERVAL 2
 
 /* Struct to store the data of a single subflow
  * This is larger than 16 bytes and required increading MPTCP_SCHED_SIZE in mptcp.h.
@@ -102,15 +102,15 @@ static bool monkeytailsched_use_subflow(struct sock *meta_sk,
 				 struct tcp_sock *tp,
 				 struct sk_buff *skb)
 {
-	MPTCP_LOG("\tmonkeytailsched_use_subflow\n");
+	//MPTCP_LOG("\tmonkeytailsched_use_subflow\n");
 
 	if (!skb || !mptcp_is_available((struct sock *)tp, skb, false)) {
-		MPTCP_LOG("\t\tmonkeytailsched_use_subflow returning FALSE because !mptcp_is_available\n");
+		//MPTCP_LOG("\t\tmonkeytailsched_use_subflow returning FALSE because !mptcp_is_available\n");
 		return false;
 	}
 
 	if (TCP_SKB_CB(skb)->path_mask != 0) {
-		MPTCP_LOG("\t\tmonkeytailsched_use_subflow returning subflow_is_active(tp)\n");
+		//MPTCP_LOG("\t\tmonkeytailsched_use_subflow returning subflow_is_active(tp)\n");
 		return subflow_is_active(tp);
 	}
 
@@ -119,10 +119,10 @@ static bool monkeytailsched_use_subflow(struct sock *meta_sk,
 			active_valid_sks = monkeytailsched_get_active_valid_sks(meta_sk);
 
 		if (subflow_is_backup(tp) && active_valid_sks > 0) {
-			MPTCP_LOG("\t\tmonkeytailsched_use_subflow returning FALSE because (subflow_is_backup(tp) && active_valid_sks > 0)\n");
+			//MPTCP_LOG("\t\tmonkeytailsched_use_subflow returning FALSE because (subflow_is_backup(tp) && active_valid_sks > 0)\n");
 			return false;
 		} else {
-			MPTCP_LOG("\t\tmonkeytailsched_use_subflow returning TRUE because NOT (subflow_is_backup(tp) && active_valid_sks > 0)\n");
+			//MPTCP_LOG("\t\tmonkeytailsched_use_subflow returning TRUE because NOT (subflow_is_backup(tp) && active_valid_sks > 0)\n");
 			return true;
 		}
 	}
@@ -186,17 +186,17 @@ static void monkeytailsched_correct_skb_pointers(struct sock *meta_sk,
 {
 	struct tcp_sock *meta_tp = tcp_sk(meta_sk);
 
-	MPTCP_LOG("\tmonkeytailsched_correct_skb_pointers\n");
+	//MPTCP_LOG("\tmonkeytailsched_correct_skb_pointers\n");
 
 	if (sk_data->monkeyhead_skb && !after(sk_data->monkeyhead_skb_end_seq, meta_tp->snd_una)) {
 		sk_data->monkeyhead_skb = NULL;
-		MPTCP_LOG("\t\tmonkeytailsched_correct_skb_pointers setting sk_data->monkeyhead_skb = NULL\n");
+		//MPTCP_LOG("\t\tmonkeytailsched_correct_skb_pointers setting sk_data->monkeyhead_skb = NULL\n");
 	}
 	if (! sk_data->monkeytail_synced) {
-		MPTCP_LOG("\t\tmonkeytailsched_correct_skb_pointers: !sk_data->monkeytail_synced\n");
+		//MPTCP_LOG("\t\tmonkeytailsched_correct_skb_pointers: !sk_data->monkeytail_synced\n");
 		if (sk_data->monkeytail_skb && !after(sk_data->monkeytail_skb_end_seq, meta_tp->snd_una)) {
 			sk_data->monkeytail_skb = NULL;
-			MPTCP_LOG("\t\tmonkeytailsched_correct_skb_pointers setting sk_data->monkeytail_skb = NULL\n");
+			//MPTCP_LOG("\t\tmonkeytailsched_correct_skb_pointers setting sk_data->monkeytail_skb = NULL\n");
 		}
 	}
 }
@@ -215,7 +215,7 @@ static int monkeytail_steps_behind(struct sk_buff_head *queue,
 	MPTCP_LOG("\t\tsend_head=%p  send_tail=%p\n",send_head,send_tail);
 
 	if (skb_queue_empty(queue)) {
-		MPTCP_LOG("\tmonkeytail_steps_behind returning 0 because skb_queue_empty()\n");
+		MPTCP_LOG("\t\tmonkeytail_steps_behind returning 0 because skb_queue_empty()\n");
 		return 0;
 	}
 
@@ -279,7 +279,7 @@ static struct sk_buff *monkeytail_next_skb_from_monkeytail(struct sk_buff_head *
 	struct sk_buff *previous;
 	struct sk_buff *skb;
 
-	MPTCP_LOG("    monkeytail_next_skb_from_monkeytail\n");
+	MPTCP_LOG("\tmonkeytail_next_skb_from_MONKEYTAIL\n");
 
 	/* this function will only work if monkeyhead and monkeytail are out of sync */
 	if (sk_data->monkeytail_synced) {
@@ -370,15 +370,15 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
 						     struct sock *meta_sk,
 							 bool *monkeyhead_jumped)
 {
-	int lag = 0;
-	int MAX_LAG = sysctl_mptcp_maxlag;
+	u32 lag = 0;
+	u32 MAX_LAG = sysctl_mptcp_maxlag;
 	struct sk_buff *previous;
 
 	/*
 	 * For monkeytail we only send redundant packets when there
 	 * are no new unsent packet waiting.
 	 */
-	MPTCP_LOG("    monkeytail_next_skb_from_monkeyhead\n");
+	MPTCP_LOG("\tmonkeytail_next_skb_from_MONKEYHEAD\n");
 	if (skb_queue_empty(queue)) {
 		MPTCP_LOG("\treturning NULL because skb_queue_empty()\n");
 		return NULL;
@@ -392,7 +392,7 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
 		MPTCP_LOG("\t\tprevious == NULL\n");
 
 		if (tcp_send_head(meta_sk) != NULL) {
-			int i = 0;
+			u32 i = 0;
 			struct sk_buff *skb = tcp_send_head(meta_sk);
 
 			MPTCP_LOG("\t\ttcp_send_head(meta_sk) != NULL\n");
@@ -509,9 +509,10 @@ static struct sk_buff *monkeytail_next_segment(struct sock *meta_sk,
 	struct tcp_sock *tp;
 	struct sk_buff *skb;
 	int active_valid_sks = -1;
+	u32 TAIL_SERVICE_INTERVAL = sysctl_mptcp_tail_service_interval;
 
-	MPTCP_LOG("monkeytail_next_segment\n");
-	MPTCP_LOG("\tstarting with first_tp=%p\n",first_tp);
+	MPTCP_LOG("********************* monkeytail_next_segment *********************\n");
+	//MPTCP_LOG("\tstarting with first_tp=%p\n",first_tp);
 
 	/* As we set it, we have to reset it as well. */
 	*limit = 0;
@@ -540,7 +541,7 @@ static struct sk_buff *monkeytail_next_segment(struct sock *meta_sk,
 
 	if (!first_tp) {
 		first_tp = mpcb->connection_list;
-		MPTCP_LOG("\tfirst_tp undefined.  setting first_tp = mpcb->connection_list=%p\n",first_tp);
+		//MPTCP_LOG("\tfirst_tp undefined.  setting first_tp = mpcb->connection_list=%p\n",first_tp);
 	}
 
 	/* still NULL (no subflow in connection_list?) */
@@ -557,7 +558,7 @@ static struct sk_buff *monkeytail_next_segment(struct sock *meta_sk,
 		struct monkeytailsched_sock_data *sk_data;
 		bool packet_from_monkeytail;
 		bool monkeyhead_jumped;
-		MPTCP_LOG("    monkeytail_next_segment trying sock %p\n", tp);
+		MPTCP_LOG("    ******** monkeytail_next_segment trying sock %p ********\n", tp);
 
 		/* Correct the skb pointers of the current subflow */
 		sk_data = monkeytailsched_get_sock_data(tp);
@@ -565,9 +566,8 @@ static struct sk_buff *monkeytail_next_segment(struct sock *meta_sk,
 
 		skb = NULL;
 		packet_from_monkeytail = false;
-		MPTCP_LOG("\ttry to get an sk_buff from the queue\n");
-		MPTCP_LOG("\tsk_data->monkeytail_synced = %d\n", sk_data->monkeytail_synced);
-		MPTCP_LOG("\tsk_data->monkeytail_service_counter = %d\n", sk_data->monkeytail_service_counter);
+		//MPTCP_LOG("\ttry to get an sk_buff from the queue\n");
+		MPTCP_LOG("\tmonkeytail_synced = %d   monkeytail_service_counter = %d\n", sk_data->monkeytail_synced, sk_data->monkeytail_service_counter);
 		if (sk_data->monkeytail_synced) {
 			/* if monkeyhead and monkeytail are synced, just service the head */
 			skb = monkeytail_next_skb_from_monkeyhead(&meta_sk->sk_write_queue, sk_data, meta_sk, &monkeyhead_jumped);
@@ -590,11 +590,11 @@ static struct sk_buff *monkeytail_next_segment(struct sock *meta_sk,
 			}
 		}
 
-		MPTCP_LOG("\tmonkeytail_next_segment monkeytail_next_skb_from_queue returned %p\n", skb);
+		MPTCP_LOG("\tmonkeytail_next_skb_from_queue returned %p\n", skb);
 		MPTCP_LOG("\tmonkeytail_synced=%d  monkeyhead=%p  monkeytail=%p\n",sk_data->monkeytail_synced,sk_data->monkeyhead_skb,sk_data->monkeytail_skb);
 
 		if (skb && monkeytailsched_use_subflow(meta_sk, active_valid_sks, tp, skb)) {
-			MPTCP_LOG("\t\tmonkeytailsched_use_subflow is true!\n");
+			MPTCP_LOG("\t\tmonkeytailsched_use_subflow is:\t\t\t\t\t\t\tTRUE!\n");
 			if (packet_from_monkeytail) {
 				MPTCP_LOG("\t\tpacket_from_monkeytail\n");
 				sk_data->monkeytail_service_counter = 0;
@@ -620,7 +620,7 @@ static struct sk_buff *monkeytail_next_segment(struct sock *meta_sk,
 			}
 
 			cb_data->next_subflow = tp->mptcp->next;
-			MPTCP_LOG("\t\tfirst_tp setting cb_data->next_subflow=%p\n",cb_data->next_subflow);
+			//MPTCP_LOG("\t\tfirst_tp setting cb_data->next_subflow=%p\n",cb_data->next_subflow);
 			*subsk = (struct sock *)tp;
 
 			if (TCP_SKB_CB(skb)->path_mask)
@@ -628,7 +628,7 @@ static struct sk_buff *monkeytail_next_segment(struct sock *meta_sk,
 			MPTCP_LOG("\tmonkeytail_next_segment return sk_buff %p and sock %p\n", skb, *subsk);
 			return skb;
 		} else {
-			MPTCP_LOG("\tmonkeytail_next_segment skipping because !skb or !use_subflow");
+			MPTCP_LOG("\tmonkeytail_next_segment skipping because !skb or !use_subflow is \t\t\tFALSE!");
 		}
 
 		tp = tp->mptcp->next;

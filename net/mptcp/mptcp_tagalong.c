@@ -237,8 +237,8 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 						     struct sk_buff *previous,
 						     struct sock *meta_sk)
 {
-	int lag = 0;
-	int MAX_LAG = sysctl_mptcp_maxlag;
+	u32 lag = 0;
+	u32 MAX_LAG = sysctl_mptcp_maxlag;
 
 	/*
 	 * For tagalong we only send redundant packets when there
@@ -297,7 +297,7 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 
 	MPTCP_LOG("\t\tprevious == NULL\n");
 	if (tcp_send_head(meta_sk) != NULL) {
-		int i = 0;
+		u32 i = 0;
 		struct sk_buff *skb = tcp_send_head(meta_sk);
 
 		MPTCP_LOG("\t\ttcp_send_head(meta_sk) != NULL\n");
