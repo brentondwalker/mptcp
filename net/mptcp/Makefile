@@ -20,6 +20,7 @@ obj-$(CONFIG_MPTCP_REDUNDANT) += mptcp_redundant.o
 obj-$(CONFIG_MPTCP_OPPREDUNDANT) += mptcp_oppredundant.o
 obj-$(CONFIG_MPTCP_TAGALONG) += mptcp_tagalong.o
 obj-$(CONFIG_MPTCP_TAGALONG) += mptcp_monkeytail.o
+obj-$(CONFIG_MPTCP_LOUDEN) += mptcp_louden.o
 
 mptcp-$(subst m,y,$(CONFIG_IPV6)) += mptcp_ipv6.o
 

@@ -115,6 +115,14 @@ config MPTCP_MONKEYTAIL
 	  This is the monkeytail redundant scheduler.  It is a hybrid between tagalong
 	  and redundant.  The head of the monkey is allowed to skip ahead in the queue,
 	  like tagalong, but it leaves its tail behind, which behaves like redundant.
+	  
+config MPTCP_LOUDEN
+	tristate "MPTCP Louden Redundant"
+	depends on (MPTCP=y)
+	---help---
+	  This is the louden redundant scheduler.  It behaves like tagalong,
+	  but services the reinject queue like redundant.  That is, it resends
+	  dropped packets ASAP on all subflows.
 
 choice
 	prompt "Default MPTCP Scheduler"
@@ -161,6 +169,13 @@ choice
 		  but when a subflow falls more than a certain number of packets behind sk_send_head
 		  it skips sending some redundant packets to catch up, ot "tag along".
 
+	config DEFAULT_LOUDEN
+		bool "Louden" if MPTCP_LOUDEN=y
+		---help---
+		  This is the louden redundant scheduler.  It behaves like tagalong,
+		  but services the reinject queue like redundant.  That is, it resends
+		  dropped packets ASAP on all subflows.
+
 
 endchoice
 endif
@@ -174,5 +189,6 @@ config DEFAULT_MPTCP_SCHED
 	default "oppredundant" if DEFAULT_OPPREDUNDANT
 	default "tagalong" if DEFAULT_TAGALONG
 	default "monkeytail" if DEFAULT_MONKEYTAIL
+	default "louden" if DEFAULT_LOUDEN
 	default "default"
 
