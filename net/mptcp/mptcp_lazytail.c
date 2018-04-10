@@ -1,5 +1,5 @@
 /*
- * mptcp_monkeytail.c
+ * mptcp_lazytail.c
  *
  *  Created on: Mar 19, 2018
  *      Author: brenton
@@ -10,7 +10,7 @@
  *	MPTCP Scheduler to reduce latency and jitter.
  *
  *
- *  This is the monkeytail redundant scheduler.  It is a hybrid of tagalong and redundant.
+ *  This is the lazytail redundant scheduler.  It is a hybrid of tagalong and redundant.
  *  Each subflow maintains two pointers into the ring of un-ACKed packets.
  *  The (monkey's) head behaves like tagalong, skipping ahead to keep up with the
  *  fastest flow.  The monkey's tail stays behind pointing to the oldest un-ACKed packet
@@ -32,7 +32,7 @@
 /* Struct to store the data of a single subflow
  * This is larger than 16 bytes and required increading MPTCP_SCHED_SIZE in mptcp.h.
  */
-struct monkeytailsched_sock_data {
+struct lazytailsched_sock_data {
 	/* The skb (or NULL) that tries to keep up with the leading flow */
 	struct sk_buff *monkeyhead_skb;
 	/* End sequence number of the skb. This number should be checked
@@ -41,48 +41,48 @@ struct monkeytailsched_sock_data {
 	u32 monkeyhead_skb_end_seq;
 
 	/* The skb (or NULL) that tracks the oldest un-ACKed packet not sent on this flow */
-	struct sk_buff *monkeytail_skb;
+	struct sk_buff *lazytail_skb;
 	/* End sequence number of the skb. This number should be checked
 	 * to be valid before the skb field is used
 	 */
-	u32 monkeytail_skb_end_seq;
+	u32 lazytail_skb_end_seq;
 
 	/* This flag indicates whether the head and tail are in sync or not. */
-	bool monkeytail_synced;
+	bool lazytail_synced;
 
 	/* When the head and tail are not synced, the keeps track of the last place the head jumped to. */
 	u32 monkeyhead_last_jump_seq;
 
-	/* Keep track of the number of monkeyhead packets sent since the last monkeytail service */
-	u32 monkeytail_service_counter;
+	/* Keep track of the number of monkeyhead packets sent since the last lazytail service */
+	u32 lazytail_service_counter;
 };
 
 /* Struct to store the data of the control block */
-struct monkeytailsched_cb_data {
+struct lazytailsched_cb_data {
 	/* The next subflow where a skb should be sent or NULL */
 	struct tcp_sock *next_subflow;
 };
 
 /* Returns the socket data from a given subflow socket */
-static struct monkeytailsched_sock_data *monkeytailsched_get_sock_data(struct tcp_sock *tp)
+static struct lazytailsched_sock_data *lazytailsched_get_sock_data(struct tcp_sock *tp)
 {
-	return (struct monkeytailsched_sock_data *)&tp->mptcp->mptcp_sched[0];
+	return (struct lazytailsched_sock_data *)&tp->mptcp->mptcp_sched[0];
 }
 
 /* Returns the control block data from a given meta socket */
-static struct monkeytailsched_cb_data *monkeytailsched_get_cb_data(struct tcp_sock *tp)
+static struct lazytailsched_cb_data *lazytailsched_get_cb_data(struct tcp_sock *tp)
 {
-	return (struct monkeytailsched_cb_data *)&tp->mpcb->mptcp_sched[0];
+	return (struct lazytailsched_cb_data *)&tp->mpcb->mptcp_sched[0];
 }
 
-static bool monkeytailsched_get_active_valid_sks(struct sock *meta_sk)
+static bool lazytailsched_get_active_valid_sks(struct sock *meta_sk)
 {
 	struct tcp_sock *meta_tp = tcp_sk(meta_sk);
 	struct mptcp_cb *mpcb = meta_tp->mpcb;
 	struct sock *sk;
 	int active_valid_sks = 0;
 
-	//MPTCP_LOG("monkeytailsched_get_active_valid_sks\n");
+	//MPTCP_LOG("lazytailsched_get_active_valid_sks\n");
 	mptcp_for_each_sk(mpcb, sk) {
 		if (subflow_is_active((struct tcp_sock *)sk) &&
 		    !mptcp_is_def_unavailable(sk))
@@ -90,39 +90,39 @@ static bool monkeytailsched_get_active_valid_sks(struct sock *meta_sk)
 	}
 
 	//if (active_valid_sks) {
-	//	MPTCP_LOG("\tmonkeytailsched_get_active_valid_sks returning active_valid_sks = TRUE\n");
+	//	MPTCP_LOG("\tlazytailsched_get_active_valid_sks returning active_valid_sks = TRUE\n");
 	//} else {
-	//	MPTCP_LOG("\tmonkeytailsched_get_active_valid_sks returning active_valid_sks = FALSE\n");
+	//	MPTCP_LOG("\tlazytailsched_get_active_valid_sks returning active_valid_sks = FALSE\n");
 	//}
 	return active_valid_sks;
 }
 
-static bool monkeytailsched_use_subflow(struct sock *meta_sk,
+static bool lazytailsched_use_subflow(struct sock *meta_sk,
 				 int active_valid_sks,
 				 struct tcp_sock *tp,
 				 struct sk_buff *skb)
 {
-	//MPTCP_LOG("\tmonkeytailsched_use_subflow\n");
+	//MPTCP_LOG("\tlazytailsched_use_subflow\n");
 
 	if (!skb || !mptcp_is_available((struct sock *)tp, skb, false)) {
-		//MPTCP_LOG("\t\tmonkeytailsched_use_subflow returning FALSE because !mptcp_is_available\n");
+		//MPTCP_LOG("\t\tlazytailsched_use_subflow returning FALSE because !mptcp_is_available\n");
 		return false;
 	}
 
 	if (TCP_SKB_CB(skb)->path_mask != 0) {
-		//MPTCP_LOG("\t\tmonkeytailsched_use_subflow returning subflow_is_active(tp)\n");
+		//MPTCP_LOG("\t\tlazytailsched_use_subflow returning subflow_is_active(tp)\n");
 		return subflow_is_active(tp);
 	}
 
 	if (TCP_SKB_CB(skb)->path_mask == 0) {
 		if (active_valid_sks == -1)
-			active_valid_sks = monkeytailsched_get_active_valid_sks(meta_sk);
+			active_valid_sks = lazytailsched_get_active_valid_sks(meta_sk);
 
 		if (subflow_is_backup(tp) && active_valid_sks > 0) {
-			//MPTCP_LOG("\t\tmonkeytailsched_use_subflow returning FALSE because (subflow_is_backup(tp) && active_valid_sks > 0)\n");
+			//MPTCP_LOG("\t\tlazytailsched_use_subflow returning FALSE because (subflow_is_backup(tp) && active_valid_sks > 0)\n");
 			return false;
 		} else {
-			//MPTCP_LOG("\t\tmonkeytailsched_use_subflow returning TRUE because NOT (subflow_is_backup(tp) && active_valid_sks > 0)\n");
+			//MPTCP_LOG("\t\tlazytailsched_use_subflow returning TRUE because NOT (subflow_is_backup(tp) && active_valid_sks > 0)\n");
 			return true;
 		}
 	}
@@ -130,18 +130,18 @@ static bool monkeytailsched_use_subflow(struct sock *meta_sk,
 	return false;
 }
 
-static struct sock *monkeytail_get_subflow(struct sock *meta_sk,
+static struct sock *lazytail_get_subflow(struct sock *meta_sk,
 					  struct sk_buff *skb,
 					  bool zero_wnd_test)
 {
 	struct tcp_sock *meta_tp = tcp_sk(meta_sk);
 	struct mptcp_cb *mpcb = meta_tp->mpcb;
-	struct monkeytailsched_cb_data *cb_data = monkeytailsched_get_cb_data(meta_tp);
+	struct lazytailsched_cb_data *cb_data = lazytailsched_get_cb_data(meta_tp);
 	struct tcp_sock *first_tp = cb_data->next_subflow;
 	struct sock *sk;
 	struct tcp_sock *tp;
 
-	MPTCP_LOG("monkeytail_get_subflow\n");
+	MPTCP_LOG("lazytail_get_subflow\n");
 
 	/* Answer data_fin on same subflow */
 	if (meta_sk->sk_shutdown & RCV_SHUTDOWN &&
@@ -181,29 +181,29 @@ static struct sock *monkeytail_get_subflow(struct sock *meta_sk,
 }
 
 /* Corrects the stored skb pointers if they are invalid */
-static void monkeytailsched_correct_skb_pointers(struct sock *meta_sk,
-					  struct monkeytailsched_sock_data *sk_data)
+static void lazytailsched_correct_skb_pointers(struct sock *meta_sk,
+					  struct lazytailsched_sock_data *sk_data)
 {
 	struct tcp_sock *meta_tp = tcp_sk(meta_sk);
 
-	//MPTCP_LOG("\tmonkeytailsched_correct_skb_pointers\n");
+	//MPTCP_LOG("\tlazytailsched_correct_skb_pointers\n");
 
 	if (sk_data->monkeyhead_skb && !after(sk_data->monkeyhead_skb_end_seq, meta_tp->snd_una)) {
 		sk_data->monkeyhead_skb = NULL;
-		//MPTCP_LOG("\t\tmonkeytailsched_correct_skb_pointers setting sk_data->monkeyhead_skb = NULL\n");
+		//MPTCP_LOG("\t\tlazytailsched_correct_skb_pointers setting sk_data->monkeyhead_skb = NULL\n");
 	}
-	if (! sk_data->monkeytail_synced) {
-		//MPTCP_LOG("\t\tmonkeytailsched_correct_skb_pointers: !sk_data->monkeytail_synced\n");
-		if (sk_data->monkeytail_skb && !after(sk_data->monkeytail_skb_end_seq, meta_tp->snd_una)) {
-			sk_data->monkeytail_skb = NULL;
-			//MPTCP_LOG("\t\tmonkeytailsched_correct_skb_pointers setting sk_data->monkeytail_skb = NULL\n");
+	if (! sk_data->lazytail_synced) {
+		//MPTCP_LOG("\t\tlazytailsched_correct_skb_pointers: !sk_data->lazytail_synced\n");
+		if (sk_data->lazytail_skb && !after(sk_data->lazytail_skb_end_seq, meta_tp->snd_una)) {
+			sk_data->lazytail_skb = NULL;
+			//MPTCP_LOG("\t\tlazytailsched_correct_skb_pointers setting sk_data->lazytail_skb = NULL\n");
 		}
 	}
 }
 
 /* Compute the number of packets between previous and the current sk_send_head,
  * or, if sksend_head is . */
-static int monkeytail_steps_behind(struct sk_buff_head *queue,
+static int lazytail_steps_behind(struct sk_buff_head *queue,
 								struct sk_buff *previous,
 								struct sock *meta_sk)
 {
@@ -211,11 +211,11 @@ static int monkeytail_steps_behind(struct sk_buff_head *queue,
 	struct sk_buff *send_head = tcp_send_head(meta_sk);
 	struct sk_buff *send_tail = skb_peek_tail(queue);
 
-	MPTCP_LOG("\tmonkeytail_steps_behind\n");
+	MPTCP_LOG("\tlazytail_steps_behind\n");
 	MPTCP_LOG("\t\tsend_head=%p  send_tail=%p\n",send_head,send_tail);
 
 	if (skb_queue_empty(queue)) {
-		MPTCP_LOG("\t\tmonkeytail_steps_behind returning 0 because skb_queue_empty()\n");
+		MPTCP_LOG("\t\tlazytail_steps_behind returning 0 because skb_queue_empty()\n");
 		return 0;
 	}
 
@@ -224,25 +224,25 @@ static int monkeytail_steps_behind(struct sk_buff_head *queue,
 		 * reaches either send_head or send_tail */
 		int steps = 0;
 		while (previous != send_head && previous != send_tail) {
-			MPTCP_LOG("\t\tmonkeytail_steps_behind advancing a step...\t%p\n", previous);
+			MPTCP_LOG("\t\tlazytail_steps_behind advancing a step...\t%p\n", previous);
 			steps ++;
 			previous = previous->next;
 		}
-		MPTCP_LOG("\t\tmonkeytail_steps_behind finally at\t%p\n", previous);
+		MPTCP_LOG("\t\tlazytail_steps_behind finally at\t%p\n", previous);
 		if (previous == send_head) {
-			MPTCP_LOG("\tmonkeytail_steps_behind returning %d\n",steps);
+			MPTCP_LOG("\tlazytail_steps_behind returning %d\n",steps);
 			return steps;
 		}
-		MPTCP_LOG("\tmonkeytail_steps_behind returning 0 because we are ahead of send_head\n");
+		MPTCP_LOG("\tlazytail_steps_behind returning 0 because we are ahead of send_head\n");
 		return 0;
 	}
 
-	MPTCP_LOG("\tmonkeytail_steps_behind returning -1 because previous = NULL\n");
+	MPTCP_LOG("\tlazytail_steps_behind returning -1 because previous = NULL\n");
 	return -1;
 }
 
 /* return the skb pointer advanced n steps in the queue */
-static struct sk_buff *monkeytail_advance_skb(struct sk_buff *skb, int num_steps)
+static struct sk_buff *lazytail_advance_skb(struct sk_buff *skb, int num_steps)
 {
 	int i;
 	for (i=0; i<num_steps; i++) {
@@ -254,42 +254,42 @@ static struct sk_buff *monkeytail_advance_skb(struct sk_buff *skb, int num_steps
 
 
 /*
- * Returns the next skb from the monkeytail pointer into the queue.
+ * Returns the next skb from the lazytail pointer into the queue.
  *
- * If it finds that the monkeytail has caught up with the monkeyhead
+ * If it finds that the lazytail has caught up with the monkeyhead
  * (or caught up to the last jump for this subflow) then it marks them as
  * synced and returns a skb from the monkeyhead.
  *
- * Returns NULL if there is nothing to send, or if monkeytail catches
+ * Returns NULL if there is nothing to send, or if lazytail catches
  * up with monkeyead.  Generally, if this function returns NULL, you should
- * call monkeytail_next_skb_from_monkeyhead() afterward because there may
+ * call lazytail_next_skb_from_monkeyhead() afterward because there may
  * still be packets up these to send.
  *
- * Should not call this unless (!sk_data->monkeytail_synced) because the
+ * Should not call this unless (!sk_data->lazytail_synced) because the
  * necessary fields in sk_data may not be set.  But if you do, it will
  * catch it and just return NULL.
  */
 /*
- * skb = monkeytail_next_skb_from_queue(&meta_sk->sk_write_queue, sk_data->skb, meta_sk);
+ * skb = lazytail_next_skb_from_queue(&meta_sk->sk_write_queue, sk_data->skb, meta_sk);
  */
-static struct sk_buff *monkeytail_next_skb_from_monkeytail(struct sk_buff_head *queue,
-						     struct monkeytailsched_sock_data *sk_data,
+static struct sk_buff *lazytail_next_skb_from_lazytail(struct sk_buff_head *queue,
+						     struct lazytailsched_sock_data *sk_data,
 						     struct sock *meta_sk)
 {
 	struct sk_buff *previous;
 	struct sk_buff *skb;
 
-	MPTCP_LOG("\tmonkeytail_next_skb_from_MONKEYTAIL\n");
+	MPTCP_LOG("\tlazytail_next_skb_from_lazytail\n");
 
 	/* this function will only work if monkeyhead and monkeytail are out of sync */
-	if (sk_data->monkeytail_synced) {
-		MPTCP_LOG("\t\treturning NULL because monkeytail_synced\n");
+	if (sk_data->lazytail_synced) {
+		MPTCP_LOG("\t\treturning NULL because lazytail_synced\n");
 		return NULL;
 	}
 
-	if (sk_data->monkeytail_skb == sk_data->monkeyhead_skb) {
-		MPTCP_LOG("\t\treturning NULL because monkeytail_skb == monkeyhead_skb\n");
-		sk_data->monkeytail_synced = true;
+	if (sk_data->lazytail_skb == sk_data->monkeyhead_skb) {
+		MPTCP_LOG("\t\treturning NULL because lazytail_skb == monkeyhead_skb\n");
+		sk_data->lazytail_synced = true;
 		return NULL;
 	}
 
@@ -298,25 +298,25 @@ static struct sk_buff *monkeytail_next_skb_from_monkeytail(struct sk_buff_head *
 		return NULL;
 	}
 
-	previous = sk_data->monkeytail_skb;
+	previous = sk_data->lazytail_skb;
 
 	if (!previous) {
-		/* The previous monkeytail packet disappeared, presumably because it was ACKed. */
+		/* The previous lazytail packet disappeared, presumably because it was ACKed. */
 		/* Check if the new oldest un-ACKed packet has caught up monkeyhead, or with the
 		 * last jump of monkeyhead
 		 */
 		skb = skb_peek(queue);
 		if (skb) {
-			MPTCP_LOG("\t\tprevious monkeytail = NULL\n");
+			MPTCP_LOG("\t\tprevious lazytail = NULL\n");
 			if (! before(TCP_SKB_CB(skb)->end_seq, sk_data->monkeyhead_last_jump_seq)) {
-				MPTCP_LOG("\t\t\tmonkeytail has caught up with most recent jump\n");
-				sk_data->monkeytail_synced = true;
+				MPTCP_LOG("\t\t\tlazytail has caught up with most recent jump\n");
+				sk_data->lazytail_synced = true;
 				// return = service the head
 				return NULL;
 			}
 			if (! before(TCP_SKB_CB(skb)->end_seq, TCP_SKB_CB(sk_data->monkeyhead_skb)->end_seq)) {
-				MPTCP_LOG("\t\t\tmonkeytail has caught up with monkeyhead seq\n");
-				sk_data->monkeytail_synced = true;
+				MPTCP_LOG("\t\t\tlazytail has caught up with monkeyhead seq\n");
+				sk_data->lazytail_synced = true;
 				// return = service the head
 				return NULL;
 			}
@@ -327,15 +327,15 @@ static struct sk_buff *monkeytail_next_skb_from_monkeytail(struct sk_buff_head *
 	/* if the last packet sent was the last in the queue, we are synced */
 	if (skb_queue_is_last(queue, previous)) {
 		MPTCP_LOG("\t\treturning NULL because skb_queue_is_last()\n");
-		sk_data->monkeytail_synced = true;
+		sk_data->lazytail_synced = true;
 		return NULL;
 	}
 
 	/* check if the tail has caught up to the most recent jump */
 	if (previous->next != NULL) { //XXX use skb_peek here?
 		if (!before(TCP_SKB_CB(previous->next)->end_seq , sk_data->monkeyhead_last_jump_seq)) {
-			MPTCP_LOG("\t\tmonkeytail has caught up with most recent jump\n");
-			sk_data->monkeytail_synced = true;
+			MPTCP_LOG("\t\tlazytail has caught up with most recent jump\n");
+			sk_data->lazytail_synced = true;
 			// service the head as normal
 			return NULL;
 		}
@@ -356,17 +356,17 @@ static struct sk_buff *monkeytail_next_skb_from_monkeytail(struct sk_buff_head *
  * Returns the next skb from the monkeyhead pointer into the queue.
  *
  * If it finds that the monkeyhead has fallen too far behind sk_send_head, it
- * jumps up to MAX_LAG steps behind it, but it leaves its monkeytail behind.
- * If the monkeyhead and monkeytail were synced it leaves the monkey tail at
+ * jumps up to MAX_LAG steps behind it, but it leaves its lazytail behind.
+ * If the monkeyhead and lazytail were synced it leaves the monkey tail at
  * monkeyhead's previous location.
- * If monkeyhead and monkeytail are not synced it leaves monkeytail right
+ * If monkeyhead and lazytail are not synced it leaves lazytail right
  * where it is.
  */
 /*
- * skb = monkeytail_next_skb_from_queue(&meta_sk->sk_write_queue, sk_data->skb, meta_sk);
+ * skb = lazytail_next_skb_from_queue(&meta_sk->sk_write_queue, sk_data->skb, meta_sk);
  */
-static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *queue,
-						     struct monkeytailsched_sock_data *sk_data,
+static struct sk_buff *lazytail_next_skb_from_monkeyhead(struct sk_buff_head *queue,
+						     struct lazytailsched_sock_data *sk_data,
 						     struct sock *meta_sk,
 							 bool *monkeyhead_jumped)
 {
@@ -374,7 +374,7 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
 	u32 MAX_LAG = sysctl_mptcp_maxlag;
 	struct sk_buff *previous;
 
-	MPTCP_LOG("\tmonkeytail_next_skb_from_MONKEYHEAD\n");
+	MPTCP_LOG("\tlazytail_next_skb_from_MONKEYHEAD\n");
 	if (skb_queue_empty(queue)) {
 		MPTCP_LOG("\treturning NULL because skb_queue_empty()\n");
 		return NULL;
@@ -396,10 +396,10 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
 			if (tcp_send_head(meta_sk)->prev == (const struct sk_buff *) queue) {
 				/* There are no un-ACKed packets before the current send_head.
 				 * Everything in flight has been ACKed.  Send a new packet.
-				 * Also, in this case monkeytail and monkeyhead must be synced,
+				 * Also, in this case lazytail and monkeyhead must be synced,
 				 * since there are no un-ACKed packets in flight. */
 				MPTCP_LOG("\t\tno un-ACKed packets in flight.  returning tcp_send_head(meta_sk)\n");
-				sk_data->monkeytail_synced = true;
+				sk_data->lazytail_synced = true;
 				return tcp_send_head(meta_sk);
 			}
 
@@ -410,10 +410,10 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
 				skb = skb->prev;
 			}
 			if (skb->prev != (const struct sk_buff *) queue) {
-				sk_data->monkeytail_synced = false;
+				sk_data->lazytail_synced = false;
 				/* this isn't strictly necessary, but it seems like the organized thing to do. */
-				sk_data->monkeytail_skb = skb_peek(queue);
-				sk_data->monkeytail_skb_end_seq = TCP_SKB_CB(sk_data->monkeytail_skb)->end_seq - 1; //XXX may need to subtract a little from this seq number
+				sk_data->lazytail_skb = skb_peek(queue);
+				sk_data->lazytail_skb_end_seq = TCP_SKB_CB(sk_data->lazytail_skb)->end_seq - 1; //XXX may need to subtract a little from this seq number
 			}
 			*monkeyhead_jumped = true;
 			MPTCP_LOG("\t\treturning backtracked %d steps from tcp_send_head(meta_sk)\n",i);
@@ -435,15 +435,15 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
 	}
 
 	/* if we are not at the tail, check how far back from the send_head we are */
-	lag = monkeytail_steps_behind(queue, previous, meta_sk);
+	lag = lazytail_steps_behind(queue, previous, meta_sk);
 	//MPTCP_LOG("\t\tcomputed lag=%d\n",lag);
 
 	/* If lag==0 then previous==send_head and we need to try sending send_head again */
 	if (lag == 0) {
 		MPTCP_LOG("\t\treturning previous because lag==0  %p  %p\n",previous,tcp_send_head(meta_sk));
 		/* the last attempt to service the head didn't go through, so deduct it */
-		if (sk_data->monkeytail_service_counter > 0) {
-			sk_data->monkeytail_service_counter--;
+		if (sk_data->lazytail_service_counter > 0) {
+			sk_data->lazytail_service_counter--;
 		}
 		return previous;
 	}
@@ -452,14 +452,14 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
 	if (lag > MAX_LAG) {
 		MPTCP_LOG("\t\treturning previous advanced by %d steps\n", (lag - MAX_LAG));
 		/* record the fact that we are leaving our tail behind, but only
-		 * set the monkeytail if it was previously synced to the head */
-		if (sk_data->monkeytail_synced) {
-			sk_data->monkeytail_synced = false;
-			sk_data->monkeytail_skb = previous;
-			sk_data->monkeytail_skb_end_seq = sk_data->monkeyhead_skb_end_seq;
+		 * set the lazytail if it was previously synced to the head */
+		if (sk_data->lazytail_synced) {
+			sk_data->lazytail_synced = false;
+			sk_data->lazytail_skb = previous;
+			sk_data->lazytail_skb_end_seq = sk_data->monkeyhead_skb_end_seq;
 		}
 		*monkeyhead_jumped = true;
-		return monkeytail_advance_skb(previous, lag-MAX_LAG);
+		return lazytail_advance_skb(previous, lag-MAX_LAG);
 	}
 
 	/* otherwise just send the next thing in our queue */
@@ -493,21 +493,21 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
  *   there is a good chance they are dropped anyway.
  *
  */
-static struct sk_buff *monkeytail_next_segment(struct sock *meta_sk,
+static struct sk_buff *lazytail_next_segment(struct sock *meta_sk,
 					      int *reinject,
 					      struct sock **subsk,
 					      unsigned int *limit)
 {
 	struct tcp_sock *meta_tp = tcp_sk(meta_sk);
 	struct mptcp_cb *mpcb = meta_tp->mpcb;
-	struct monkeytailsched_cb_data *cb_data = monkeytailsched_get_cb_data(meta_tp);
+	struct lazytailsched_cb_data *cb_data = lazytailsched_get_cb_data(meta_tp);
 	struct tcp_sock *first_tp = cb_data->next_subflow;
 	struct tcp_sock *tp;
 	struct sk_buff *skb;
 	int active_valid_sks = -1;
-	u32 TAIL_SERVICE_INTERVAL = sysctl_mptcp_tail_service_interval;
+	//u32 TAIL_SERVICE_INTERVAL = sysctl_mptcp_tail_service_interval;
 
-	MPTCP_LOG("********************* monkeytail_next_segment *********************\n");
+	MPTCP_LOG("********************* lazytail_next_segment *********************\n");
 	//MPTCP_LOG("\tstarting with first_tp=%p\n",first_tp);
 
 	/* As we set it, we have to reset it as well. */
@@ -516,7 +516,7 @@ static struct sk_buff *monkeytail_next_segment(struct sock *meta_sk,
 	if (skb_queue_empty(&mpcb->reinject_queue) &&
 	    skb_queue_empty(&meta_sk->sk_write_queue)) {
 		/* Nothing to send */
-		MPTCP_LOG("\tmonkeytail_next_segment return NULL because skb_queue_empty()\n");
+		MPTCP_LOG("\tlazytail_next_segment return NULL because skb_queue_empty()\n");
 		return NULL;
 	}
 
@@ -525,11 +525,11 @@ static struct sk_buff *monkeytail_next_segment(struct sock *meta_sk,
 	if (skb) {
 		*subsk = get_available_subflow(meta_sk, skb, false);
 		if (!*subsk) {
-			MPTCP_LOG("\tmonkeytail_next_segment return NULL because (!*subsk)\n");
+			MPTCP_LOG("\tlazytail_next_segment return NULL because (!*subsk)\n");
 			return NULL;
 		}
 		*reinject = 1;
-		MPTCP_LOG("\tmonkeytail_next_segment return reinject sk_buff %p and sock %p\n", skb, *subsk);
+		MPTCP_LOG("\tlazytail_next_segment return reinject sk_buff %p and sock %p\n", skb, *subsk);
 		return skb;
 	}
 
@@ -542,64 +542,64 @@ static struct sk_buff *monkeytail_next_segment(struct sock *meta_sk,
 
 	/* still NULL (no subflow in connection_list?) */
 	if (!first_tp) {
-		MPTCP_LOG("\tmonkeytail_next_segment return NULL because (!first_tp)\n");
+		MPTCP_LOG("\tlazytail_next_segment return NULL because (!first_tp)\n");
 		return NULL;
 	}
 
 	tp = first_tp;
 
 	*reinject = 0;
-	active_valid_sks = monkeytailsched_get_active_valid_sks(meta_sk);
+	active_valid_sks = lazytailsched_get_active_valid_sks(meta_sk);
 	do {
-		struct monkeytailsched_sock_data *sk_data;
-		bool packet_from_monkeytail;
+		struct lazytailsched_sock_data *sk_data;
+		bool packet_from_lazytail;
 		bool monkeyhead_jumped;
-		MPTCP_LOG("    ******** monkeytail_next_segment trying sock %p ********\n", tp);
+		MPTCP_LOG("    ******** lazytail_next_segment trying sock %p ********\n", tp);
 
 		/* Correct the skb pointers of the current subflow */
-		sk_data = monkeytailsched_get_sock_data(tp);
-		monkeytailsched_correct_skb_pointers(meta_sk, sk_data);
+		sk_data = lazytailsched_get_sock_data(tp);
+		lazytailsched_correct_skb_pointers(meta_sk, sk_data);
 
 		skb = NULL;
-		packet_from_monkeytail = false;
+		packet_from_lazytail = false;
 		//MPTCP_LOG("\ttry to get an sk_buff from the queue\n");
-		MPTCP_LOG("\tmonkeytail_synced = %d   monkeytail_service_counter = %d\n", sk_data->monkeytail_synced, sk_data->monkeytail_service_counter);
-		if (sk_data->monkeytail_synced) {
-			/* if monkeyhead and monkeytail are synced, just service the head */
-			skb = monkeytail_next_skb_from_monkeyhead(&meta_sk->sk_write_queue, sk_data, meta_sk, &monkeyhead_jumped);
+		MPTCP_LOG("\tlazytail_synced = %d   lazytail_service_counter = %d\n", sk_data->lazytail_synced, sk_data->lazytail_service_counter);
+		if (sk_data->lazytail_synced) {
+			/* if monkeyhead and lazytail are synced, just service the head */
+			skb = lazytail_next_skb_from_monkeyhead(&meta_sk->sk_write_queue, sk_data, meta_sk, &monkeyhead_jumped);
 			/* if we failed to get one from the head, try the tail */
-			//XXX this doesn't make sense.  IF they are synced, then the monkeytail is undefined!
-			if (!skb) {
-				skb = monkeytail_next_skb_from_monkeytail(&meta_sk->sk_write_queue, sk_data, meta_sk);
-				packet_from_monkeytail = true;
-			}
+			//XXX this doesn't make sense.  If they are synced, then the lazytail is undefined!!
+			//if (!skb) {
+			//	skb = lazytail_next_skb_from_lazytail(&meta_sk->sk_write_queue, sk_data, meta_sk);
+			//	packet_from_lazytail = true;
+			//}
 		} else {
-			/* if they are not synced, we decide which to service based on a counter */
-			if (sk_data->monkeytail_service_counter >= TAIL_SERVICE_INTERVAL) {
+			/* if they are not synced, we only service the tail when it has been overtaken by ACKs */
+			if (! sk_data->lazytail_skb) {
 				/* try to get a packet from the tail */
-				skb = monkeytail_next_skb_from_monkeytail(&meta_sk->sk_write_queue, sk_data, meta_sk);
-				packet_from_monkeytail = true;
+				skb = lazytail_next_skb_from_lazytail(&meta_sk->sk_write_queue, sk_data, meta_sk);
+				packet_from_lazytail = true;
 			}
 			/* if we failed to get one from the tail, we still need to try the head */
 			if (!skb) {
-				skb = monkeytail_next_skb_from_monkeyhead(&meta_sk->sk_write_queue, sk_data, meta_sk, &monkeyhead_jumped);
-				packet_from_monkeytail = false;
+				skb = lazytail_next_skb_from_monkeyhead(&meta_sk->sk_write_queue, sk_data, meta_sk, &monkeyhead_jumped);
+				packet_from_lazytail = false;
 			}
 		}
 
-		MPTCP_LOG("\tmonkeytail_next_skb_from_queue returned %p\n", skb);
-		MPTCP_LOG("\tmonkeytail_synced=%d  monkeyhead=%p  monkeytail=%p\n",sk_data->monkeytail_synced,sk_data->monkeyhead_skb,sk_data->monkeytail_skb);
+		MPTCP_LOG("\tlazytail_next_skb_from_queue returned %p\n", skb);
+		MPTCP_LOG("\tlazytail_synced=%d  monkeyhead=%p  lazytail=%p\n",sk_data->lazytail_synced,sk_data->monkeyhead_skb,sk_data->lazytail_skb);
 
-		if (skb && monkeytailsched_use_subflow(meta_sk, active_valid_sks, tp, skb)) {
-			MPTCP_LOG("\t\tmonkeytailsched_use_subflow is:\t\t\t\t\t\t\tTRUE!\n");
-			if (packet_from_monkeytail) {
-				MPTCP_LOG("\t\tpacket_from_monkeytail\n");
-				sk_data->monkeytail_service_counter = 0;
-				sk_data->monkeytail_skb = skb;
-				sk_data->monkeytail_skb_end_seq = TCP_SKB_CB(skb)->end_seq;
+		if (skb && lazytailsched_use_subflow(meta_sk, active_valid_sks, tp, skb)) {
+			MPTCP_LOG("\t\tlazytailsched_use_subflow is:\t\t\t\t\t\t\tTRUE!\n");
+			if (packet_from_lazytail) {
+				MPTCP_LOG("\t\tpacket_from_lazytail\n");
+				sk_data->lazytail_service_counter = 0;
+				sk_data->lazytail_skb = skb;
+				sk_data->lazytail_skb_end_seq = TCP_SKB_CB(skb)->end_seq;
 			} else {
-				MPTCP_LOG("\t\tNOT packet_from_monkeytail\n");
-				sk_data->monkeytail_service_counter++;
+				MPTCP_LOG("\t\tNOT packet_from_lazytail\n");
+				sk_data->lazytail_service_counter++;
 				if (monkeyhead_jumped) {
 					MPTCP_LOG("\t\tmonkeyhead_jumped!\n");
 					/* record the place where we jumped to */
@@ -622,10 +622,10 @@ static struct sk_buff *monkeytail_next_segment(struct sock *meta_sk,
 
 			if (TCP_SKB_CB(skb)->path_mask)
 				*reinject = -1;
-			MPTCP_LOG("\tmonkeytail_next_segment return sk_buff %p and sock %p\n", skb, *subsk);
+			MPTCP_LOG("\tlazytail_next_segment return sk_buff %p and sock %p\n", skb, *subsk);
 			return skb;
 		} else {
-			MPTCP_LOG("\tmonkeytail_next_segment skipping because !skb or !use_subflow is \t\t\tFALSE!");
+			MPTCP_LOG("\tlazytail_next_segment skipping because !skb or !use_subflow is \t\t\tFALSE!");
 		}
 
 		tp = tp->mptcp->next;
@@ -634,14 +634,14 @@ static struct sk_buff *monkeytail_next_segment(struct sock *meta_sk,
 	} while (tp != first_tp);
 
 	/* Nothing to send */
-	MPTCP_LOG("\tmonkeytail_next_segment return NULL (end of function)\n");
+	MPTCP_LOG("\tlazytail_next_segment return NULL (end of function)\n");
 	return NULL;
 }
 
-static void monkeytail_release(struct sock *sk)
+static void lazytail_release(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
-	struct monkeytailsched_cb_data *cb_data = monkeytailsched_get_cb_data(tp);
+	struct lazytailsched_cb_data *cb_data = lazytailsched_get_cb_data(tp);
 
 	/* Check if the next subflow would be the released one. If yes correct
 	 * the pointer
@@ -650,36 +650,36 @@ static void monkeytail_release(struct sock *sk)
 		cb_data->next_subflow = tp->mptcp->next;
 }
 
-static struct mptcp_sched_ops mptcp_sched_monkeytail = {
-	.get_subflow = monkeytail_get_subflow,
-	.next_segment = monkeytail_next_segment,
-	.release = monkeytail_release,
-	.name = "monkeytail",
+static struct mptcp_sched_ops mptcp_sched_lazytail = {
+	.get_subflow = lazytail_get_subflow,
+	.next_segment = lazytail_next_segment,
+	.release = lazytail_release,
+	.name = "lazytail",
 	.owner = THIS_MODULE,
 };
 
-static int __init monkeytail_register(void)
+static int __init lazytail_register(void)
 {
-	MPTCP_LOG("monkeytail_register\n");
-	BUILD_BUG_ON(sizeof(struct monkeytailsched_sock_data) > MPTCP_SCHED_SIZE);
-	BUILD_BUG_ON(sizeof(struct monkeytailsched_cb_data) > MPTCP_SCHED_DATA_SIZE);
+	MPTCP_LOG("lazytail_register\n");
+	BUILD_BUG_ON(sizeof(struct lazytailsched_sock_data) > MPTCP_SCHED_SIZE);
+	BUILD_BUG_ON(sizeof(struct lazytailsched_cb_data) > MPTCP_SCHED_DATA_SIZE);
 
-	if (mptcp_register_scheduler(&mptcp_sched_monkeytail))
+	if (mptcp_register_scheduler(&mptcp_sched_lazytail))
 		return -1;
 
 	return 0;
 }
 
-static void monkeytail_unregister(void)
+static void lazytail_unregister(void)
 {
-	MPTCP_LOG("monkeytail_unregister\n");
-	mptcp_unregister_scheduler(&mptcp_sched_monkeytail);
+	MPTCP_LOG("lazytail_unregister\n");
+	mptcp_unregister_scheduler(&mptcp_sched_lazytail);
 }
 
-module_init(monkeytail_register);
-module_exit(monkeytail_unregister);
+module_init(lazytail_register);
+module_exit(lazytail_unregister);
 
 MODULE_AUTHOR("Brenton Walker");
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("MONKEYTAIL REDUNDANT MPTCP");
+MODULE_DESCRIPTION("LAZYTAIL REDUNDANT MPTCP");
 MODULE_VERSION("0.90");
