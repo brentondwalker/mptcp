@@ -30,7 +30,7 @@
 //#define TAIL_SERVICE_INTERVAL 2
 
 /* Struct to store the data of a single subflow
- * This is larger than 16 bytes and required increading MPTCP_SCHED_SIZE in mptcp.h.
+ * This is larger than 16 bytes and required increasing MPTCP_SCHED_SIZE in mptcp.h.
  */
 struct lazytailsched_sock_data {
 	/* The skb (or NULL) that tries to keep up with the leading flow */

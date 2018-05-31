@@ -31,6 +31,13 @@
 #else
 #define MPTCP_LOG(...)
 #endif
+#define MPTCP_TRACE_ON
+#ifdef MPTCP_TRACE_ON
+#define MPTCP_TRACE(...) pr_info(__VA_ARGS__)
+#else
+#define MPTCP_TRACE(...)
+#endif
+
 
 /* Struct to store the data of a single subflow */
 struct tagalongsched_sock_data {
@@ -235,10 +242,12 @@ static struct sk_buff *tagalong_advance_skb(struct sk_buff *skb, int num_steps)
  */
 static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 						     struct sk_buff *previous,
-						     struct sock *meta_sk)
+						     struct sock *meta_sk,
+							 bool *send_head_again)
 {
 	u32 lag = 0;
 	u32 MAX_LAG = sysctl_mptcp_maxlag;
+	*send_head_again = false;
 
 	/*
 	 * For tagalong we only send redundant packets when there
@@ -266,6 +275,7 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 		/* If lag==0 then previous==send_head and we need to try sending send_head again */
 		if (lag == 0) {
 			MPTCP_LOG("\t\treturning previous because lag==0  %p  %p\n",previous,tcp_send_head(meta_sk));
+			*send_head_again = true;
 			return previous;
 		}
 
@@ -384,6 +394,7 @@ static struct sk_buff *tagalong_next_segment(struct sock *meta_sk,
 	*reinject = 0;
 	active_valid_sks = tagalongsched_get_active_valid_sks(meta_sk);
 	do {
+		bool send_head_again = false;
 		struct tagalongsched_sock_data *sk_data;
 		MPTCP_LOG("\ttagalong_next_segment trying sock %p\n", tp);
 
@@ -397,10 +408,16 @@ static struct sk_buff *tagalong_next_segment(struct sock *meta_sk,
 		 */
 
 		skb = tagalong_next_skb_from_queue(&meta_sk->sk_write_queue,
-						    sk_data->skb, meta_sk);
+						    sk_data->skb, meta_sk, &send_head_again);
 		MPTCP_LOG("\ttagalong_next_segment tagalong_next_skb_from_queue returned %p\n", skb);
 		if (skb && tagalongsched_use_subflow(meta_sk, active_valid_sks, tp,
 						skb)) {
+			if (send_head_again) {
+				MPTCP_TRACE("%p\t%p\t%u\t%u\tsend_head again",tp,skb,TCP_SKB_CB(skb)->seq,TCP_SKB_CB(skb)->end_seq);
+			} else {
+				MPTCP_TRACE("%p\t%p\t%u\t%u",tp,skb,TCP_SKB_CB(skb)->seq,TCP_SKB_CB(skb)->end_seq);
+			}
+
 			sk_data->skb = skb;
 			sk_data->skb_end_seq = TCP_SKB_CB(skb)->end_seq;
 			cb_data->next_subflow = tp->mptcp->next;

@@ -568,7 +568,8 @@ static struct sk_buff *monkeytail_next_segment(struct sock *meta_sk,
 			/* if monkeyhead and monkeytail are synced, just service the head */
 			skb = monkeytail_next_skb_from_monkeyhead(&meta_sk->sk_write_queue, sk_data, meta_sk, &monkeyhead_jumped);
 			/* if we failed to get one from the head, try the tail */
-			//XXX this doesn't make sense.  IF they are synced, then the monkeytail is undefined!
+			//XXX this doesn't make sense.  If they are synced, then the monkeytail is undefined!
+			//    if they just became out of sync, then something should have returned from monkeyhead
 			if (!skb) {
 				skb = monkeytail_next_skb_from_monkeytail(&meta_sk->sk_write_queue, sk_data, meta_sk);
 				packet_from_monkeytail = true;
