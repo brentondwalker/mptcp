@@ -207,12 +207,16 @@ static int monkeytail_steps_behind(struct sk_buff_head *queue,
 								struct sk_buff *previous,
 								struct sock *meta_sk)
 {
-
 	struct sk_buff *send_head = tcp_send_head(meta_sk);
 	struct sk_buff *send_tail = skb_peek_tail(queue);
 
 	MPTCP_LOG("\tmonkeytail_steps_behind\n");
 	MPTCP_LOG("\t\tsend_head=%p  send_tail=%p\n",send_head,send_tail);
+
+	if (send_head == NULL) {
+		MPTCP_LOG("\t\tmonkeytail_steps_behind returning -1 because send_head is NULL\n");
+		return -1;
+	}
 
 	if (skb_queue_empty(queue)) {
 		MPTCP_LOG("\t\tmonkeytail_steps_behind returning 0 because skb_queue_empty()\n");
@@ -370,7 +374,7 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
 						     struct sock *meta_sk,
 							 bool *monkeyhead_jumped)
 {
-	u32 lag = 0;
+	int lag = 0;
 	u32 MAX_LAG = sysctl_mptcp_maxlag;
 	struct sk_buff *previous;
 
@@ -439,8 +443,8 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
 	//MPTCP_LOG("\t\tcomputed lag=%d\n",lag);
 
 	/* If lag==0 then previous==send_head and we need to try sending send_head again */
-	if (lag == 0) {
-		MPTCP_LOG("\t\treturning previous because lag==0  %p  %p\n",previous,tcp_send_head(meta_sk));
+	if (previous == tcp_send_head(meta_sk)) {
+		MPTCP_LOG("\t\treturning previous because (previous == tcp_send_head(meta_sk))  %p  %p\n", previous, tcp_send_head(meta_sk));
 		/* the last attempt to service the head didn't go through, so deduct it */
 		if (sk_data->monkeytail_service_counter > 0) {
 			sk_data->monkeytail_service_counter--;
@@ -449,7 +453,7 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
 	}
 
 	/* if necessary, catch up with the leading subflow */
-	if (lag > MAX_LAG) {
+	if ((lag > 0) && (lag > MAX_LAG)) {
 		MPTCP_LOG("\t\treturning previous advanced by %d steps\n", (lag - MAX_LAG));
 		/* record the fact that we are leaving our tail behind, but only
 		 * set the monkeytail if it was previously synced to the head */

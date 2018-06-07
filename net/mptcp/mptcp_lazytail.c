@@ -26,6 +26,12 @@
 #else
 #define MPTCP_LOG(...)
 #endif
+//#define MPTCP_DEBUG2
+#ifdef MPTCP_DEBUG2
+#define MPTCP_LOG2(...) pr_info(__VA_ARGS__)
+#else
+#define MPTCP_LOG2(...)
+#endif
 
 //#define TAIL_SERVICE_INTERVAL 2
 
@@ -201,45 +207,54 @@ static void lazytailsched_correct_skb_pointers(struct sock *meta_sk,
 	}
 }
 
-/* Compute the number of packets between previous and the current sk_send_head,
- * or, if sksend_head is . */
+/* Compute the number of packets between previous and the current sk_send_head.
+ * If previous->next == send_head, then this will return 1.  This is the normal
+ * state of things, and indicates the subflow is not lagging at all.
+ * If previous is at, or ahead of, send_head it will return 0.  This
+ * should actually never happen.
+ *  */
 static int lazytail_steps_behind(struct sk_buff_head *queue,
 								struct sk_buff *previous,
 								struct sock *meta_sk)
 {
-
 	struct sk_buff *send_head = tcp_send_head(meta_sk);
 	struct sk_buff *send_tail = skb_peek_tail(queue);
 
 	MPTCP_LOG("\tlazytail_steps_behind\n");
 	MPTCP_LOG("\t\tsend_head=%p  send_tail=%p\n",send_head,send_tail);
 
+	if (send_head == NULL) {
+		MPTCP_LOG("\t\tlazytail_steps_behind returning -1 because send_head is NULL\n");
+		return -1;
+	}
+
+	if (previous == NULL) {
+		MPTCP_LOG("\tlazytail_steps_behind returning -2 because previous = NULL\n");
+		return -2;
+	}
+
 	if (skb_queue_empty(queue)) {
-		MPTCP_LOG("\t\tlazytail_steps_behind returning 0 because skb_queue_empty()\n");
-		return 0;
+		MPTCP_LOG("\t\tlazytail_steps_behind returning -3 because skb_queue_empty()\n");
+		return -3;
 	}
 
-	if (previous != NULL) {
-		/* count how many steps we can advance previous until it
-		 * reaches either send_head or send_tail */
-		int steps = 0;
-		while (previous != send_head && previous != send_tail) {
-			MPTCP_LOG("\t\tlazytail_steps_behind advancing a step...\t%p\n", previous);
-			steps ++;
-			previous = previous->next;
-		}
-		MPTCP_LOG("\t\tlazytail_steps_behind finally at\t%p\n", previous);
-		if (previous == send_head) {
-			MPTCP_LOG("\tlazytail_steps_behind returning %d\n",steps);
-			return steps;
-		}
-		MPTCP_LOG("\tlazytail_steps_behind returning 0 because we are ahead of send_head\n");
-		return 0;
+	/* count how many steps we can advance previous until it
+	 * reaches either send_head or send_tail */
+	int steps = 0;
+	while (previous != send_head && previous != send_tail) {
+		MPTCP_LOG("\t\tlazytail_steps_behind advancing a step...\t%p\n", previous);
+		steps ++;
+		previous = previous->next;
 	}
-
-	MPTCP_LOG("\tlazytail_steps_behind returning -1 because previous = NULL\n");
-	return -1;
+	MPTCP_LOG("\t\tlazytail_steps_behind finally at\t%p\n", previous);
+	if (previous == send_head) {
+		MPTCP_LOG("\tlazytail_steps_behind returning %d\n",steps);
+		return steps;
+	}
+	MPTCP_LOG("\tlazytail_steps_behind returning 0 because we are ahead of send_head\n");
+	return 0;
 }
+
 
 /* return the skb pointer advanced n steps in the queue */
 static struct sk_buff *lazytail_advance_skb(struct sk_buff *skb, int num_steps)
@@ -287,7 +302,7 @@ static struct sk_buff *lazytail_next_skb_from_lazytail(struct sk_buff_head *queu
 		return NULL;
 	}
 
-	if (sk_data->lazytail_skb == sk_data->monkeyhead_skb) {
+	if ((sk_data->lazytail_skb != NULL) && (sk_data->lazytail_skb == sk_data->monkeyhead_skb)) {
 		MPTCP_LOG("\t\treturning NULL because lazytail_skb == monkeyhead_skb\n");
 		sk_data->lazytail_synced = true;
 		return NULL;
@@ -321,6 +336,7 @@ static struct sk_buff *lazytail_next_skb_from_lazytail(struct sk_buff_head *queu
 				return NULL;
 			}
 		}
+		MPTCP_LOG2("skb_from_lazytail\t%p\t%u\tpeek\n", skb, TCP_SKB_CB(skb)->seq);
 		return skb;
 	}
 
@@ -344,11 +360,15 @@ static struct sk_buff *lazytail_next_skb_from_lazytail(struct sk_buff_head *queu
 	/* this also should never (ever ever ever) happen */
 	if (tcp_send_head(meta_sk) == previous) {
 		MPTCP_LOG("\treturning tcp_send_head(meta_sk)\n");
-		return tcp_send_head(meta_sk);
+		skb = tcp_send_head(meta_sk);
+		MPTCP_LOG2("skb_from_lazytail\t%p\t%u\ttcp_send_head   ERROR ERROR ERROR ERROR\n", skb, TCP_SKB_CB(skb)->seq);
+		return skb;
 	}
 
 	MPTCP_LOG("\treturning skb_queue_next(queue, previous)\n");
-	return skb_queue_next(queue,previous);
+	skb = skb_queue_next(queue,previous);
+	MPTCP_LOG2("skb_from_lazytail\t%p\t%u\tskb_queue_next\n", skb, TCP_SKB_CB(skb)->seq);
+	return skb;
 }
 
 
@@ -370,7 +390,7 @@ static struct sk_buff *lazytail_next_skb_from_monkeyhead(struct sk_buff_head *qu
 						     struct sock *meta_sk,
 							 bool *monkeyhead_jumped)
 {
-	u32 lag = 0;
+	int lag = 0;
 	u32 MAX_LAG = sysctl_mptcp_maxlag;
 	struct sk_buff *previous;
 
@@ -400,6 +420,8 @@ static struct sk_buff *lazytail_next_skb_from_monkeyhead(struct sk_buff_head *qu
 				 * since there are no un-ACKed packets in flight. */
 				MPTCP_LOG("\t\tno un-ACKed packets in flight.  returning tcp_send_head(meta_sk)\n");
 				sk_data->lazytail_synced = true;
+				skb = tcp_send_head(meta_sk);
+				MPTCP_LOG2("skb_from_monkeyhead\t%p\t%u\ttcp_send_head\n", skb, TCP_SKB_CB(skb)->seq);
 				return tcp_send_head(meta_sk);
 			}
 
@@ -409,6 +431,11 @@ static struct sk_buff *lazytail_next_skb_from_monkeyhead(struct sk_buff_head *qu
 				i++;
 				skb = skb->prev;
 			}
+			/*
+			 * This may be an error.  If we only backtrack one step from send_head,
+			 * then the head and tail aren't really becoming un-synced.
+			 * OTOH, this code never appears to get used.
+			 */
 			if (skb->prev != (const struct sk_buff *) queue) {
 				sk_data->lazytail_synced = false;
 				/* this isn't strictly necessary, but it seems like the organized thing to do. */
@@ -417,12 +444,15 @@ static struct sk_buff *lazytail_next_skb_from_monkeyhead(struct sk_buff_head *qu
 			}
 			*monkeyhead_jumped = true;
 			MPTCP_LOG("\t\treturning backtracked %d steps from tcp_send_head(meta_sk)\n",i);
+
+			MPTCP_LOG2("skb_from_monkeyhead\t%p\t%u\t%d steps from tcp_send_head\n", skb, TCP_SKB_CB(skb)->seq, i);
 			return skb;
 		}
 
 		/* If there are no unsent packets, re-send the tail of the queue.
 		 * If we get here the tail should actually be null. */
 		MPTCP_LOG("\t\treturning skb_peek_tail(queue)\n");
+		MPTCP_LOG2("skb_from_monkeyhead\t%p\t%u\tskb_peek_tail\n", skb_peek_tail(queue), TCP_SKB_CB(skb_peek_tail(queue))->seq);
 		return skb_peek_tail(queue);
 	}
 
@@ -436,20 +466,27 @@ static struct sk_buff *lazytail_next_skb_from_monkeyhead(struct sk_buff_head *qu
 
 	/* if we are not at the tail, check how far back from the send_head we are */
 	lag = lazytail_steps_behind(queue, previous, meta_sk);
-	//MPTCP_LOG("\t\tcomputed lag=%d\n",lag);
+	MPTCP_LOG2("\t\tcomputed lag=%d\tMAX_LAG=%d\n",lag,MAX_LAG);
 
 	/* If lag==0 then previous==send_head and we need to try sending send_head again */
-	if (lag == 0) {
+	//if (lag == 0) {
+	if (previous == tcp_send_head(meta_sk)) {
+		// verify that conclusion
+		//if (tcp_send_head(meta_sk) != previous) {
+		//	MPTCP_LOG2("ERROR: skb_from_monkeyhead: lag=0 but tcp_send_head(meta_sk) != previous\t%p\t%p\n", tcp_send_head(meta_sk), previous);
+		//}
 		MPTCP_LOG("\t\treturning previous because lag==0  %p  %p\n",previous,tcp_send_head(meta_sk));
 		/* the last attempt to service the head didn't go through, so deduct it */
 		if (sk_data->lazytail_service_counter > 0) {
 			sk_data->lazytail_service_counter--;
 		}
+		MPTCP_LOG2("skb_from_monkeyhead\t%p\t%u\tprevious\n", previous, TCP_SKB_CB(previous)->seq);
 		return previous;
 	}
 
-	/* if necessary, catch up with the leading subflow */
-	if (lag > MAX_LAG) {
+	/* If necessary, catch up with the leading subflow
+	 * In the case where MAX_LAG=0, when lag=1 it is not really out of sync. */
+	if ((lag > 0) && (lag > MAX_LAG)) {
 		MPTCP_LOG("\t\treturning previous advanced by %d steps\n", (lag - MAX_LAG));
 		/* record the fact that we are leaving our tail behind, but only
 		 * set the lazytail if it was previously synced to the head */
@@ -459,11 +496,14 @@ static struct sk_buff *lazytail_next_skb_from_monkeyhead(struct sk_buff_head *qu
 			sk_data->lazytail_skb_end_seq = sk_data->monkeyhead_skb_end_seq;
 		}
 		*monkeyhead_jumped = true;
-		return lazytail_advance_skb(previous, lag-MAX_LAG);
+		struct sk_buff *skb = lazytail_advance_skb(previous, lag-MAX_LAG);
+		MPTCP_LOG2("skb_from_monkeyhead\t%p\t%u\tlazytail_advance_skb %d steps\tlag=%d\tMAX_LAG=%d\n", skb, TCP_SKB_CB(skb)->seq, (lag-MAX_LAG), lag, MAX_LAG);
+		return skb;
 	}
 
 	/* otherwise just send the next thing in our queue */
 	MPTCP_LOG("\t\treturning previous->next\n");
+	MPTCP_LOG2("skb_from_monkeyhead\t%p\t%u\tprevious->next\n", previous->next, TCP_SKB_CB(previous->next)->seq);
 	return previous->next;
 }
 
@@ -475,7 +515,7 @@ static struct sk_buff *lazytail_next_skb_from_monkeyhead(struct sk_buff_head *qu
  *   In this case when the head sends a packet, the tail has to advance too.
  *   When the head jumps ahead and the tail gets left behind, then sending
  *   on the head does not advance the tail.  But we need to watch for the
- *   tail catching upso we can put them back in sync.
+ *   tail catching up so we can put them back in sync.
  *
  * - When the head skips ahead and the tail is left behind, how can we tell
  *   what packets were sent by the head?  It leaves no record.  If the tail
@@ -591,6 +631,7 @@ static struct sk_buff *lazytail_next_segment(struct sock *meta_sk,
 		MPTCP_LOG("\tlazytail_synced=%d  monkeyhead=%p  lazytail=%p\n",sk_data->lazytail_synced,sk_data->monkeyhead_skb,sk_data->lazytail_skb);
 
 		if (skb && lazytailsched_use_subflow(meta_sk, active_valid_sks, tp, skb)) {
+			MPTCP_LOG2("++++ sending on %p\n", tp);
 			MPTCP_LOG("\t\tlazytailsched_use_subflow is:\t\t\t\t\t\t\tTRUE!\n");
 			if (packet_from_lazytail) {
 				MPTCP_LOG("\t\tpacket_from_lazytail\n");

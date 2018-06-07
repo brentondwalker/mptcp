@@ -192,14 +192,19 @@ static int tagalong_steps_behind(struct sk_buff_head *queue,
 								struct sk_buff *previous,
 								struct sock *meta_sk)
 {
-
 	struct sk_buff *send_head = tcp_send_head(meta_sk);
 	struct sk_buff *send_tail = skb_peek_tail(queue);
 
-	MPTCP_LOG("tagalong_steps_behind\n");
+	MPTCP_LOG("\ttagalong_steps_behind\n");
+	MPTCP_LOG("\t\tsend_head=%p  send_tail=%p\n",send_head,send_tail);
+
+	if (send_head == NULL) {
+		MPTCP_LOG("\t\ttagalong_steps_behind returning -1 because send_head is NULL\n");
+		return -1;
+	}
 
 	if (skb_queue_empty(queue)) {
-		MPTCP_LOG("\ttagalong_steps_behind returning 0 because skb_queue_empty()\n");
+		MPTCP_LOG("\t\ttagalong_steps_behind returning 0 because skb_queue_empty()\n");
 		return 0;
 	}
 
@@ -225,6 +230,7 @@ static int tagalong_steps_behind(struct sk_buff_head *queue,
 	return -1;
 }
 
+
 /* return the skb pointer advanced n steps in the queue */
 static struct sk_buff *tagalong_advance_skb(struct sk_buff *skb, int num_steps)
 {
@@ -245,7 +251,7 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 						     struct sock *meta_sk,
 							 bool *send_head_again)
 {
-	u32 lag = 0;
+	int lag = 0;
 	u32 MAX_LAG = sysctl_mptcp_maxlag;
 	*send_head_again = false;
 
@@ -273,14 +279,14 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 		lag = tagalong_steps_behind(queue, previous, meta_sk);
 
 		/* If lag==0 then previous==send_head and we need to try sending send_head again */
-		if (lag == 0) {
-			MPTCP_LOG("\t\treturning previous because lag==0  %p  %p\n",previous,tcp_send_head(meta_sk));
+		if (previous == tcp_send_head(meta_sk)) {
+			MPTCP_LOG("\t\treturning previous because (previous == tcp_send_head(meta_sk))  %p  %p\n",previous,tcp_send_head(meta_sk));
 			*send_head_again = true;
 			return previous;
 		}
 
 		/* if necessary, catch up with the leading subflow */
-		if (lag > MAX_LAG) {
+		if ((lag > 0) && (lag > MAX_LAG)) {
 			MPTCP_LOG("\t\treturning previous advanced by %d steps\n", (lag - MAX_LAG));
 			return tagalong_advance_skb(previous, lag-MAX_LAG);
 		}
@@ -290,19 +296,10 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 		return previous->next;
 	}
 
-	/* previous is null.  If there are unsent packets in the meta queue, send the next one */
-	/*
-	 * This is questionable.  If the connection is idle, and then several packets arrive,
-	 * this will lead to no redundancy at first.  Really we would like to re-send the last
-	 * packet sent - not send a new one.  But how can we tell if send_head has been sent on
-	 * another subflow or not?
-	 * It is also a problem when there are losses on the subflow.  The CWND is small and it ends
-	 * up waiting for ACKs.  Then when it's time to send a new packet, previous is null.
-	 *
-	 * Here's some reasoning:  If previous is null, but send_head->prev is not, then someone
-	 * else must have sent send_head->prev.  We can start at send_head->prev and backtrack
-	 * for the appropriate lag, knowing that we haven't sent any of the packets in the
-	 * current meta queue.
+	/* previous is null.
+	 * This means that the last segment we sent on this subflow has been ACKed.
+	 * The proper behavior for tagalong is to start at send_head and count backwards
+	 * to MAX_LAG steps.
 	 */
 
 	MPTCP_LOG("\t\tprevious == NULL\n");
