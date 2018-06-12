@@ -31,7 +31,7 @@
 #else
 #define MPTCP_LOG(...)
 #endif
-#define MPTCP_TRACE_ON
+//#define MPTCP_TRACE_ON
 #ifdef MPTCP_TRACE_ON
 #define MPTCP_TRACE(...) pr_info(__VA_ARGS__)
 #else
@@ -198,14 +198,18 @@ static int tagalong_steps_behind(struct sk_buff_head *queue,
 	MPTCP_LOG("\ttagalong_steps_behind\n");
 	MPTCP_LOG("\t\tsend_head=%p  send_tail=%p\n",send_head,send_tail);
 
-	if (send_head == NULL) {
-		MPTCP_LOG("\t\ttagalong_steps_behind returning -1 because send_head is NULL\n");
+	if (skb_queue_empty(queue)) {
+		MPTCP_LOG("\t\ttagalong_steps_behind returning -1 because skb_queue_empty()\n");
 		return -1;
 	}
 
-	if (skb_queue_empty(queue)) {
-		MPTCP_LOG("\t\ttagalong_steps_behind returning 0 because skb_queue_empty()\n");
-		return 0;
+	/* If send_head is null, every segment in the queue has been sent.
+	 * Use send_tail as the reference point for computing lag. */
+	if (send_head == NULL) {
+		//MPTCP_LOG("\t\ttagalong_steps_behind returning -1 because send_head is NULL\n");
+		//return -1;
+		MPTCP_LOG("\t\ttagalong_steps_behind: send_head is NULL.  Using send_tail for computing lag\n");
+		//send_head = send_tail;
 	}
 
 	if (previous != NULL) {
@@ -218,7 +222,7 @@ static int tagalong_steps_behind(struct sk_buff_head *queue,
 			previous = previous->next;
 		}
 		MPTCP_LOG("\t\ttagalong_steps_behind finally at\t%p\n", previous);
-		if (previous == send_head) {
+		if (send_head == NULL || previous == send_head) {
 			MPTCP_LOG("\ttagalong_steps_behind returning %d\n",steps);
 			return steps;
 		}
@@ -227,7 +231,7 @@ static int tagalong_steps_behind(struct sk_buff_head *queue,
 	}
 
 	MPTCP_LOG("\ttagalong_steps_behind returning -1 because previous = NULL\n");
-	return -1;
+	return -2;
 }
 
 
@@ -254,6 +258,8 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 	int lag = 0;
 	u32 MAX_LAG = sysctl_mptcp_maxlag;
 	*send_head_again = false;
+	struct sk_buff *send_head = tcp_send_head(meta_sk);
+	struct sk_buff *skb = NULL;
 
 	/*
 	 * For tagalong we only send redundant packets when there
@@ -273,6 +279,20 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 		if (skb_queue_is_last(queue, previous)) {
 			MPTCP_LOG("\t\treturning NULL because previous!=NULL and skb_queue_is_last()\n");
 			return NULL;
+		}
+
+		/* if MAX_LAG=0 behave like opportunistic redundant.
+		 * (it shouldn't be necessary to do this explicitly) */
+		if (MAX_LAG == 0) {
+			/* whether or not previous is null, if there are unsent packets, send the next one */
+			if (tcp_send_head(meta_sk) != NULL) {
+				MPTCP_LOG("\treturning tcp_send_head(meta_sk)\n");
+				return tcp_send_head(meta_sk);
+			}
+
+			/* If there are no unsent packets, re-send the tail of the queue */
+			MPTCP_LOG("\treturning skb_peek_tail(queue)\n");
+			return skb_peek_tail(queue);
 		}
 
 		/* if we are not at the tail, check how far back from the send_head we are */
@@ -298,39 +318,28 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 
 	/* previous is null.
 	 * This means that the last segment we sent on this subflow has been ACKed.
-	 * The proper behavior for tagalong is to start at send_head and count backwards
-	 * to MAX_LAG steps.
+	 * The proper behavior for tagalong is to start at send_head (or send_tail if send_head is null)
+	 * and count backwards to MAX_LAG steps.
 	 */
-
 	MPTCP_LOG("\t\tprevious == NULL\n");
-	if (tcp_send_head(meta_sk) != NULL) {
-		u32 i = 0;
-		struct sk_buff *skb = tcp_send_head(meta_sk);
-
-		MPTCP_LOG("\t\ttcp_send_head(meta_sk) != NULL\n");
-
-		if (tcp_send_head(meta_sk)->prev == (const struct sk_buff *) queue) {
-			/* There are no un-ACKed packets before the current send_head.
-			 * Everything in flight has been ACKed.  Send a new packet.
-			 * This case is superflous given the code below.  Should remove it. */
-			MPTCP_LOG("\t\treturning tcp_send_head(meta_sk)\n");
-			return tcp_send_head(meta_sk);
-		}
-
-		/* There are packets that were sent on another link but not yet ACKed.
-		 * Backtrack by the appropriate possible lag and re-send one of them. */
-		while (i < MAX_LAG && skb->prev != (const struct sk_buff *) queue) {
-			i++;
-			skb = skb->prev;
-		}
-		MPTCP_LOG("\t\treturning backtracked %d steps from tcp_send_head(meta_sk)\n",i);
-		return skb;
+	skb = send_head;
+	if (send_head == NULL) {
+		skb = skb_peek_tail(queue);
 	}
 
-	/* If there are no unsent packets, re-send the tail of the queue.
-	 * If we get here the tail should actually be null. */
-	MPTCP_LOG("\t\treturning skb_peek_tail(queue)\n");
-	return skb_peek_tail(queue);
+	/* the queue is empty.  This should have been caught above. */
+	if (! skb) {
+		return NULL;
+	}
+
+	/* Backtrack by the appropriate possible lag and re-send one of them. */
+	u32 i = 0;
+	while (i < MAX_LAG && skb->prev != (const struct sk_buff *) queue) {
+		i++;
+		skb = skb->prev;
+	}
+	MPTCP_LOG("\t\treturning backtracked %d steps from tcp_send_head(meta_sk)\n",i);
+	return skb;
 }
 
 
@@ -413,6 +422,9 @@ static struct sk_buff *tagalong_next_segment(struct sock *meta_sk,
 				MPTCP_TRACE("%p\t%p\t%u\t%u\tsend_head again",tp,skb,TCP_SKB_CB(skb)->seq,TCP_SKB_CB(skb)->end_seq);
 			} else {
 				MPTCP_TRACE("%p\t%p\t%u\t%u",tp,skb,TCP_SKB_CB(skb)->seq,TCP_SKB_CB(skb)->end_seq);
+			}
+			if (sk_data->skb_end_seq > TCP_SKB_CB(skb)->end_seq) {
+				MPTCP_TRACE("\tbackwards in data sequence!\t%u\t%u",sk_data->skb_end_seq, TCP_SKB_CB(skb)->end_seq);
 			}
 
 			sk_data->skb = skb;
