@@ -257,9 +257,10 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 {
 	int lag = 0;
 	u32 MAX_LAG = sysctl_mptcp_maxlag;
-	*send_head_again = false;
 	struct sk_buff *send_head = tcp_send_head(meta_sk);
 	struct sk_buff *skb = NULL;
+	u32 i;
+	*send_head_again = false;
 
 	/*
 	 * For tagalong we only send redundant packets when there
@@ -279,20 +280,6 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 		if (skb_queue_is_last(queue, previous)) {
 			MPTCP_LOG("\t\treturning NULL because previous!=NULL and skb_queue_is_last()\n");
 			return NULL;
-		}
-
-		/* if MAX_LAG=0 behave like opportunistic redundant.
-		 * (it shouldn't be necessary to do this explicitly) */
-		if (MAX_LAG == 0) {
-			/* whether or not previous is null, if there are unsent packets, send the next one */
-			if (tcp_send_head(meta_sk) != NULL) {
-				MPTCP_LOG("\treturning tcp_send_head(meta_sk)\n");
-				return tcp_send_head(meta_sk);
-			}
-
-			/* If there are no unsent packets, re-send the tail of the queue */
-			MPTCP_LOG("\treturning skb_peek_tail(queue)\n");
-			return skb_peek_tail(queue);
 		}
 
 		/* if we are not at the tail, check how far back from the send_head we are */
@@ -333,13 +320,43 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
 	}
 
 	/* Backtrack by the appropriate possible lag and re-send one of them. */
-	u32 i = 0;
+	i = 0;
 	while (i < MAX_LAG && skb->prev != (const struct sk_buff *) queue) {
 		i++;
 		skb = skb->prev;
 	}
 	MPTCP_LOG("\t\treturning backtracked %d steps from tcp_send_head(meta_sk)\n",i);
 	return skb;
+}
+
+
+/*
+ * tagalong scheduler is supposed to behave like oppredundant when MAX_LAG=0
+ * and like redundant when MAX_LAG is very large.  This function help verify
+ * this behavior by taking the skb's returned by the different schedulers
+ * and, if they are different, logging the full queue.
+ */
+static void dump_queue(struct sk_buff *skb, struct sk_buff *skb2, struct sk_buff_head *queue, struct sock *meta_sk, char* sched_name) {
+	struct sk_buff *skbi;
+
+	if (skb != skb2) {
+		pr_info("tagalong != redundant\t\t%p\t%p\t%p\n",skb,skb2,queue);
+		skbi = skb_peek_tail(&meta_sk->sk_write_queue);
+		while (skbi != (struct sk_buff *)queue) {
+			if (skbi == tcp_send_head(meta_sk)) {
+				pr_info("%p\t%u\t send_head\n",skbi,TCP_SKB_CB(skbi)->seq);
+			} else {
+				pr_info("%p\t%u\n",skbi,TCP_SKB_CB(skbi)->seq);
+			}
+			if (skbi == skb) {
+				pr_info("\t\t tagalong\n");
+			}
+			if (skbi == skb2) {
+				pr_info("\t\t %s\n",sched_name);
+			}
+			skbi = skbi->prev;
+		}
+	}
 }
 
 
@@ -415,6 +432,9 @@ static struct sk_buff *tagalong_next_segment(struct sock *meta_sk,
 
 		skb = tagalong_next_skb_from_queue(&meta_sk->sk_write_queue,
 						    sk_data->skb, meta_sk, &send_head_again);
+		//dump_queue(skb, redundant_next_skb_from_queue(&meta_sk->sk_write_queue,sk_data->skb, meta_sk),
+		//					&meta_sk->sk_write_queue, meta_sk, "redundant");
+
 		MPTCP_LOG("\ttagalong_next_segment tagalong_next_skb_from_queue returned %p\n", skb);
 		if (skb && tagalongsched_use_subflow(meta_sk, active_valid_sks, tp,
 						skb)) {
@@ -450,6 +470,7 @@ static struct sk_buff *tagalong_next_segment(struct sock *meta_sk,
 	MPTCP_LOG("\ttagalong_next_segment return NULL (end of function)\n");
 	return NULL;
 }
+
 
 static void tagalong_release(struct sock *sk)
 {
