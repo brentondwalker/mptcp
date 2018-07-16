@@ -1,21 +1,23 @@
 /*
- * mptcp_monkeytail.c
+ *	MPTCP MonkeyTail Scheduler.
  *
- *  Created on: Mar 19, 2018
- *      Author: brenton
+ *	This scheduler is a hybrid between redundant and tagalong.  Each subflow maintains
+ *	two pointers into the multipath socket's output queue.  The "monkeyhead" behaves
+ *	like tagalong, trying to keep up with send_head and sending the freshest segments.
+ *	The "monkeytail" is left behind when the monkeyhead skips over segments.
+ *	The monkeytail behaves like the redundant scheduler, making sure each un-acked
+ *	segment is eventually sent on each subflow.
+ *	The MAX_LAG value determines how far behind send_head the monkeyhead is allowed to get.
+ *	The TAIL_SERVICE_INTERVAL determines how often the scheduler services the monkeytail.
+ *
+ *	Brenton Walker <brenton.walker@ikt.uni-hannover.de>
+ *
+ *	This program is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU General Public License
+ *  as published by the Free Software Foundation; either version
+ *  2 of the License, or (at your option) any later version.
  */
 
-
-/*
- *	MPTCP Scheduler to reduce latency and jitter.
- *
- *
- *  This is the monkeytail redundant scheduler.  It is a hybrid of tagalong and redundant.
- *  Each subflow maintains two pointers into the ring of un-ACKed packets.
- *  The (monkey's) head behaves like tagalong, skipping ahead to keep up with the
- *  fastest flow.  The monkey's tail stays behind pointing to the oldest un-ACKed packet
- *  that has not been sent on this subflow.
- */
 
 #include <linux/module.h>
 #include <net/mptcp.h>
@@ -27,7 +29,6 @@
 #define MPTCP_LOG(...)
 #endif
 
-//#define TAIL_SERVICE_INTERVAL 2
 
 /* Struct to store the data of a single subflow
  * This is larger than 16 bytes and required increading MPTCP_SCHED_SIZE in mptcp.h.
@@ -89,11 +90,6 @@ static bool monkeytailsched_get_active_valid_sks(struct sock *meta_sk)
 			active_valid_sks++;
 	}
 
-	//if (active_valid_sks) {
-	//	MPTCP_LOG("\tmonkeytailsched_get_active_valid_sks returning active_valid_sks = TRUE\n");
-	//} else {
-	//	MPTCP_LOG("\tmonkeytailsched_get_active_valid_sks returning active_valid_sks = FALSE\n");
-	//}
 	return active_valid_sks;
 }
 
@@ -279,9 +275,6 @@ static struct sk_buff *monkeytail_advance_skb(struct sk_buff *skb, int num_steps
  * necessary fields in sk_data may not be set.  But if you do, it will
  * catch it and just return NULL.
  */
-/*
- * skb = monkeytail_next_skb_from_queue(&meta_sk->sk_write_queue, sk_data->skb, meta_sk);
- */
 static struct sk_buff *monkeytail_next_skb_from_monkeytail(struct sk_buff_head *queue,
 						     struct monkeytailsched_sock_data *sk_data,
 						     struct sock *meta_sk)
@@ -320,6 +313,14 @@ static struct sk_buff *monkeytail_next_skb_from_monkeytail(struct sk_buff_head *
 		MPTCP_LOG("\t\tprevious monkeytail = NULL\n");
 		skb = skb_peek(queue);
 		if (skb == NULL) {
+			MPTCP_LOG("\t\treturning NULL previous=NULL and skb_peek=NULL\n");
+			sk_data->monkeytail_synced = true;
+			return NULL;
+		}
+
+		/* see if the start of skb has caught up (or passed) with the last jump */
+		if (! before(TCP_SKB_CB(skb)->seq, sk_data->monkeyhead_last_jump_seq)) {
+			MPTCP_LOG("\t\t\tmonkeytail head of output queue skb_peek has caught up with most recent jump\n");
 			sk_data->monkeytail_synced = true;
 			return NULL;
 		}
@@ -346,13 +347,13 @@ static struct sk_buff *monkeytail_next_skb_from_monkeytail(struct sk_buff_head *
 
 	//XXX just in case - remove later
 	if (skb==NULL) {
-		pr_info("ERROR: monkeytail_next_skb_from_monkeytail() got skb=NULL!\n");
+		MPTCP_LOG("ERROR: monkeytail_next_skb_from_monkeytail() got skb=NULL!\n");
 		return NULL;
 	}
 
 	/* see if the start of skb has caught up (or passed) with the last jump */
 	if (! before(TCP_SKB_CB(skb)->seq, sk_data->monkeyhead_last_jump_seq)) {
-		MPTCP_LOG("\t\t\tmonkeytail has caught up with most recent jump\n");
+		MPTCP_LOG("\t\t\tmonkeytail has caught up with most recent jump \t WARNINGWARNING should not get here!\n");
 		sk_data->monkeytail_synced = true;
 		return NULL;
 	}
@@ -364,21 +365,6 @@ static struct sk_buff *monkeytail_next_skb_from_monkeytail(struct sk_buff_head *
 		// return = service the head
 		return NULL;
 	}
-
-	// if we are not already caught up, the rest of this code checks if sending this next
-	//segment will get us caught up to last_jump or monkeyhead it should be moved somewhere else
-
-	/* check if sending this segment will catch us up with the last jump */
-	/*if (! before(TCP_SKB_CB(skb)->end_seq, sk_data->monkeyhead_last_jump_seq)) {  //monkeyhead_last_jump_seq should be the seq at the start of the packet
-		MPTCP_LOG("\t\t\tmonkeytail will catch up with most recent jump after sending this segment\n");
-		*tmp_monkeytail_synced = true;
-	}*/
-
-	/* check if sending this segment will catch us up with the head */
-	/*if (! before(TCP_SKB_CB(skb)->end_seq, TCP_SKB_CB(sk_data->monkeyhead_skb)->seq)) {
-		MPTCP_LOG("\t\t\tmonkeytail will catch up with monkeyhead seq after sending this segment\n");
-		*tmp_monkeytail_synced = true;
-	}*/
 
 	return skb;
 }
@@ -394,9 +380,6 @@ static struct sk_buff *monkeytail_next_skb_from_monkeytail(struct sk_buff_head *
  * If monkeyhead and monkeytail are not synced it leaves monkeytail right
  * where it is.
  */
-/*
- * skb = monkeytail_next_skb_from_queue(&meta_sk->sk_write_queue, sk_data->skb, meta_sk);
- */
 static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *queue,
 						     struct monkeytailsched_sock_data *sk_data,
 						     struct sock *meta_sk,
@@ -408,7 +391,6 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
 	struct sk_buff *skb = NULL;
 	struct sk_buff *previous;
 	u32 i;
-	//*send_head_again = false;
 
 	MPTCP_LOG("\tmonkeytail_next_skb_from_MONKEYHEAD\n");
 	if (skb_queue_empty(queue)) {
@@ -436,7 +418,6 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
 		/* If lag==0 then previous==send_head and we need to try sending send_head again */
 		if (previous == tcp_send_head(meta_sk)) {
 			MPTCP_LOG("\t\treturning previous because (previous == tcp_send_head(meta_sk))  %p  %p\n",previous,tcp_send_head(meta_sk));
-			//*send_head_again = true;
 			return previous;
 		}
 
@@ -459,8 +440,10 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
 		}
 
 		/* otherwise just send the next thing in our queue */
-		MPTCP_LOG("\t\treturning skb_queue_next(queue, previous);\n");
-		return skb_queue_next(queue, previous);
+		//MPTCP_LOG("\t\treturning skb_queue_next(queue, previous);\n");
+		//return skb_queue_next(queue, previous);
+		MPTCP_LOG("\t\treturning previous->next\n");
+		return previous->next;
 	}
 
 	/* previous is null.
@@ -469,7 +452,6 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
 	 * and count backwards to MAX_LAG steps.
 	 */
 	MPTCP_LOG("\t\tprevious == NULL\n");
-
 	skb = send_head;
 	if (send_head == NULL) {
 		skb = skb_peek_tail(queue);
@@ -500,31 +482,7 @@ static struct sk_buff *monkeytail_next_skb_from_monkeyhead(struct sk_buff_head *
 }
 
 
-/*
- * Two big dilemmas for this scheduler:
- *
- * - When there is a leading flow, how to keep the tail synced with the head?
- *   In this case when the head sends a packet, the tail has to advance too.
- *   When the head jumps ahead and the tail gets left behind, then sending
- *   on the head does not advance the tail.  But we need to watch for the
- *   tail catching upso we can put them back in sync.
- *
- * - When the head skips ahead and the tail is left behind, how can we tell
- *   what packets were sent by the head?  It leaves no record.  If the tail
- *   needs to re-send *everything* to catch up, then if the leading flow
- *   gets out of sync, you could end up in a situation of re-sending
- *   everything, and never being able to catch up.
- *   Proposed solution: Keep a record of the head's most recent jump (the
- *   landing point).  The idea is that the head has already sent every packet
- *   between this point and its current location.  If the tail catches up to
- *   this point, by catching up or ACK, then the tail is considered synced
- *   with the head again.
- *   Otherwise, in the case where one flow is consistently lagging, we accept
- *   that the tail will resend packets that have been sent by the head.  In
- *   the case of a lagging subflow, the tail is sending much older packets,
- *   there is a good chance they are dropped anyway.
- *
- */
+/* The main entry point of the schduler. */
 static struct sk_buff *monkeytail_next_segment(struct sock *meta_sk,
 					      int *reinject,
 					      struct sock **subsk,
@@ -599,7 +557,6 @@ static struct sk_buff *monkeytail_next_segment(struct sock *meta_sk,
 		if (sk_data->monkeytail_synced) {
 			/* if monkeyhead and monkeytail are synced, just service the head */
 			skb = monkeytail_next_skb_from_monkeyhead(&meta_sk->sk_write_queue, sk_data, meta_sk, &monkeyhead_jumped);
-
 		} else {
 			/* if they are not synced, we decide which to service based on a counter */
 			if (sk_data->monkeytail_service_counter >= TAIL_SERVICE_INTERVAL) {
@@ -621,6 +578,9 @@ static struct sk_buff *monkeytail_next_segment(struct sock *meta_sk,
 			MPTCP_LOG("\t\tmonkeytailsched_use_subflow is:\t\t\t\t\t\t\tTRUE!\n");
 			if (packet_from_monkeytail) {
 				MPTCP_LOG("\t\tpacket_from_monkeytail\n");
+
+				MPTCP_LOG("packet_from_monkeytail\t%u\t%p\n",sk_data->monkeytail_service_counter,tp);
+
 				/* here we /should/ check if this segment will catch us up to monkeyhead or the last jump point */
 				sk_data->monkeytail_service_counter = 0;
 				sk_data->monkeytail_skb = skb;
@@ -630,6 +590,9 @@ static struct sk_buff *monkeytail_next_segment(struct sock *meta_sk,
 				sk_data->monkeytail_service_counter++;
 				if (monkeyhead_jumped) {
 					MPTCP_LOG("\t\tmonkeyhead_jumped!\n");
+					if (sk_data->monkeytail_synced) {
+						MPTCP_LOG(" desynchronized\t%p\n",tp);
+					}
 					sk_data->monkeytail_synced = false;
 
 					/* record the place where we jumped to */
@@ -705,5 +668,5 @@ module_exit(monkeytail_unregister);
 
 MODULE_AUTHOR("Brenton Walker");
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("MONKEYTAIL REDUNDANT MPTCP");
+MODULE_DESCRIPTION("MONKEYTAIL MPTCP");
 MODULE_VERSION("0.90");

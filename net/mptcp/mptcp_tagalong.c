@@ -1,26 +1,20 @@
 /*
- *	MPTCP Scheduler to reduce latency and jitter.
+ *	MPTCP Tagalong Scheduler.
  *
- *	This scheduler sends all packets redundantly on all available subflows.
+ *	This scheduler is a generalization of the opportunistic redundant scheduler.
+ *	It is supposed to send all packets redundantly, but each flow pays attention to
+ *	how many segments behind sk_send_head it falls.  If it falls too far behind, the
+ *	subflow will skip over some segments packets to catch up, or "tag along".
+ *	the MAX_LAG value determines how far behind any subflow is allowed to get.
  *
- *	Initial Design & Implementation:
- *	Tobias Erbshaeusser <erbshauesser@dvs.tu-darmstadt.de>
- *	Alexander Froemmgen <froemmge@dvs.tu-darmstadt.de>
- *
- *	Initial corrections & modifications:
- *	Christian Pinedo <christian.pinedo@ehu.eus>
- *	Igor Lopez <igor.lopez@ehu.eus>
+ *	Brenton Walker <brenton.walker@ikt.uni-hannover.de>
  *
  *	This program is free software; you can redistribute it and/or
- *      modify it under the terms of the GNU General Public License
- *      as published by the Free Software Foundation; either version
- *      2 of the License, or (at your option) any later version.
- *
- *  This is the tagalong redundant scheduler.  It is supposed to send all packets
- *  redundantly, but each flow pays attention to how many packets behind sk_send_head
- *  it falls.  If it falls too far behind, a subflow will skip sending some redundant
- *  packets to catch up, or "tag along".
+ *  modify it under the terms of the GNU General Public License
+ *  as published by the Free Software Foundation; either version
+ *  2 of the License, or (at your option) any later version.
  */
+
 
 #include <linux/module.h>
 #include <net/mptcp.h>
@@ -336,6 +330,7 @@ static struct sk_buff *tagalong_next_skb_from_queue(struct sk_buff_head *queue,
  * this behavior by taking the skb's returned by the different schedulers
  * and, if they are different, logging the full queue.
  */
+/*
 static void dump_queue(struct sk_buff *skb, struct sk_buff *skb2, struct sk_buff_head *queue, struct sock *meta_sk, char* sched_name) {
 	struct sk_buff *skbi;
 
@@ -358,7 +353,7 @@ static void dump_queue(struct sk_buff *skb, struct sk_buff *skb2, struct sk_buff
 		}
 	}
 }
-
+*/
 
 static struct sk_buff *tagalong_next_segment(struct sock *meta_sk,
 					      int *reinject,
@@ -513,7 +508,7 @@ static void tagalong_unregister(void)
 module_init(tagalong_register);
 module_exit(tagalong_unregister);
 
-MODULE_AUTHOR("Tobias Erbshaeusser, Alexander Froemmgen");
+MODULE_AUTHOR("Brenton Walker");
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("TAGALONG REDUNDANT MPTCP");
+MODULE_DESCRIPTION("TAGALONG MPTCP");
 MODULE_VERSION("0.90");

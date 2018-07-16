@@ -125,14 +125,6 @@ config MPTCP_LAZYTAIL
 	  services the tail when the head and tail are out of sync, and when the
 	  tail has been overtaken by ACKs.
 	  
-config MPTCP_LOUDEN
-	tristate "MPTCP Louden Redundant"
-	depends on (MPTCP=y)
-	---help---
-	  This is the louden redundant scheduler.  It behaves like tagalong,
-	  but services the reinject queue like redundant.  That is, it resends
-	  dropped packets ASAP on all subflows.
-
 choice
 	prompt "Default MPTCP Scheduler"
 	default DEFAULT
@@ -186,13 +178,6 @@ choice
 		  services the tail when the head and tail are out of sync, and when the
 		  tail has been overtaken by ACKs.
 
-	config DEFAULT_LOUDEN
-		bool "Louden" if MPTCP_LOUDEN=y
-		---help---
-		  This is the louden redundant scheduler.  It behaves like tagalong,
-		  but services the reinject queue like redundant.  That is, it resends
-		  dropped packets ASAP on all subflows.
-
 
 endchoice
 endif
@@ -207,6 +192,5 @@ config DEFAULT_MPTCP_SCHED
 	default "tagalong" if DEFAULT_TAGALONG
 	default "monkeytail" if DEFAULT_MONKEYTAIL
 	default "lazytail" if DEFAULT_LAZYTAIL
-	default "louden" if DEFAULT_LOUDEN
 	default "default"
 

@@ -1,24 +1,20 @@
 /*
- *	MPTCP Scheduler to reduce latency and jitter.
+ *	MPTCP Opportunistic Redundant Scheduler.
  *
- *	This scheduler sends all packets redundantly on all available subflows.
+ *	This scheduler is based on the redundant scheduler, but does not re-send every segment.
+ *	If there are unsent segments available, it will send those first.  If there are no
+ *	unsent segments available it will re-send the most recently sent one.
  *
- *	Initial Design & Implementation:
- *	Tobias Erbshaeusser <erbshauesser@dvs.tu-darmstadt.de>
- *	Alexander Froemmgen <froemmge@dvs.tu-darmstadt.de>
+ *	This is a kernel module implementation of an MPTCP scheduler described in:
+ *	"A Programming Model for Application-defined Multipath TCP Scheduling" by Froemgen et. al.
  *
- *	Initial corrections & modifications:
- *	Christian Pinedo <christian.pinedo@ehu.eus>
- *	Igor Lopez <igor.lopez@ehu.eus>
+ *  Modified from redundant scheduler:
+ *	Brenton Walker <brenton.walker@ikt.uni-hannover.de>
  *
  *	This program is free software; you can redistribute it and/or
- *      modify it under the terms of the GNU General Public License
- *      as published by the Free Software Foundation; either version
- *      2 of the License, or (at your option) any later version.
- *
- *  This is the opportunistic redundant scheduler, sending packets packets on all subflows
- *  which have not exhausted their congestion window when a packet is scheduled
- *  for the first time.
+ *  modify it under the terms of the GNU General Public License
+ *  as published by the Free Software Foundation; either version
+ *  2 of the License, or (at your option) any later version.
  */
 
 #include <linux/module.h>
@@ -179,9 +175,6 @@ static void oppredsched_correct_skb_pointers(struct sock *meta_sk,
 }
 
 /* Returns the next skb from the queue */
-/*
- * skb = oppredundant_next_skb_from_queue(&meta_sk->sk_write_queue, sk_data->skb, meta_sk);
- */
 static struct sk_buff *oppredundant_next_skb_from_queue(struct sk_buff_head *queue,
 						     struct sk_buff *previous,
 						     struct sock *meta_sk)
@@ -215,6 +208,7 @@ static struct sk_buff *oppredundant_next_skb_from_queue(struct sk_buff_head *que
 	return skb_peek_tail(queue);
 }
 
+/* The main entry point of the schduler. */
 static struct sk_buff *oppredundant_next_segment(struct sock *meta_sk,
 					      int *reinject,
 					      struct sock **subsk,
@@ -349,7 +343,7 @@ static void oppredundant_unregister(void)
 module_init(oppredundant_register);
 module_exit(oppredundant_unregister);
 
-MODULE_AUTHOR("Tobias Erbshaeusser, Alexander Froemmgen");
+MODULE_AUTHOR("Brenton Walker");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("OPPORTUNISTIC REDUNDANT MPTCP");
 MODULE_VERSION("0.90");

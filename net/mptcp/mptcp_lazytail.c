@@ -1,21 +1,26 @@
 /*
- * mptcp_lazytail.c
+ *	MPTCP LazyTail Scheduler.
  *
- *  Created on: Mar 19, 2018
- *      Author: brenton
+ *	This scheduler is a hybrid between redundant and tagalong.  Each subflow maintains
+ *	two pointers into the multipath socket's output queue.  The "monkeyhead" behaves
+ *	like tagalong, trying to keep up with send_head and sending the freshest segments.
+ *	The "monkeytail" is left behind when the monkeyhead skips over segments.
+ *	The monkeytail behaves like the redundant scheduler, making sure each un-acked
+ *	segment is eventually sent on each subflow.
+ *
+ *	Unlike monkeytail, this scheduler services the monkeytail whenever it is overtaken
+ *	by ACKs.
+ *
+ *	The MAX_LAG value determines how far behind send_head the monkeyhead is allowed to get.
+ *
+ *	Brenton Walker <brenton.walker@ikt.uni-hannover.de>
+ *
+ *	This program is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU General Public License
+ *  as published by the Free Software Foundation; either version
+ *  2 of the License, or (at your option) any later version.
  */
 
-
-/*
- *	MPTCP Scheduler to reduce latency and jitter.
- *
- *
- *  This is the lazytail redundant scheduler.  It is a hybrid of tagalong and redundant.
- *  Each subflow maintains two pointers into the ring of un-ACKed packets.
- *  The (monkey's) head behaves like tagalong, skipping ahead to keep up with the
- *  fastest flow.  The monkey's tail stays behind pointing to the oldest un-ACKed packet
- *  that has not been sent on this subflow.
- */
 
 #include <linux/module.h>
 #include <net/mptcp.h>
@@ -33,7 +38,6 @@
 #define MPTCP_LOG2(...)
 #endif
 
-//#define TAIL_SERVICE_INTERVAL 2
 
 /* Struct to store the data of a single subflow
  * This is larger than 16 bytes and required increasing MPTCP_SCHED_SIZE in mptcp.h.
@@ -95,11 +99,6 @@ static bool lazytailsched_get_active_valid_sks(struct sock *meta_sk)
 			active_valid_sks++;
 	}
 
-	//if (active_valid_sks) {
-	//	MPTCP_LOG("\tlazytailsched_get_active_valid_sks returning active_valid_sks = TRUE\n");
-	//} else {
-	//	MPTCP_LOG("\tlazytailsched_get_active_valid_sks returning active_valid_sks = FALSE\n");
-	//}
 	return active_valid_sks;
 }
 
@@ -234,10 +233,7 @@ static int lazytail_steps_behind(struct sk_buff_head *queue,
 	/* If send_head is null, every segment in the queue has been sent.
 	 * Use send_tail as the reference point for computing lag. */
 	if (send_head == NULL) {
-		//MPTCP_LOG("\t\tlazytail_steps_behind returning -1 because send_head is NULL\n");
-		//return -1;
 		MPTCP_LOG("\t\tlazytail_steps_behind: send_head is NULL.  Using send_tail for computing lag\n");
-		//send_head = send_tail;
 	}
 
 	if (previous != NULL) {
@@ -291,9 +287,6 @@ static struct sk_buff *lazytail_advance_skb(struct sk_buff *skb, int num_steps)
  * necessary fields in sk_data may not be set.  But if you do, it will
  * catch it and just return NULL.
  */
-/*
- * skb = lazytail_next_skb_from_queue(&meta_sk->sk_write_queue, sk_data->skb, meta_sk);
- */
 static struct sk_buff *lazytail_next_skb_from_lazytail(struct sk_buff_head *queue,
 						     struct lazytailsched_sock_data *sk_data,
 						     struct sock *meta_sk)
@@ -330,7 +323,6 @@ static struct sk_buff *lazytail_next_skb_from_lazytail(struct sk_buff_head *queu
 	previous = sk_data->lazytail_skb;
 
 	if (!previous) {
-		/* The previous monkeytail packet disappeared, presumably because it was ACKed. */
 		/* Check if the new oldest un-ACKed packet has caught up monkeyhead, or with the
 		 * last jump of monkeyhead
 		 */
@@ -390,21 +382,6 @@ static struct sk_buff *lazytail_next_skb_from_lazytail(struct sk_buff_head *queu
 		return NULL;
 	}
 
-	// if we are not already caught up, the rest of this code checks if sending this next
-	//segment will get us caught up to last_jump or monkeyhead it should be moved somewhere else
-
-	/* check if sending this segment will catch us up with the last jump */
-	/*if (! before(TCP_SKB_CB(skb)->end_seq, sk_data->monkeyhead_last_jump_seq)) {  //monkeyhead_last_jump_seq should be the seq at the start of the packet
-		MPTCP_LOG("\t\t\tmonkeytail will catch up with most recent jump after sending this segment\n");
-		*tmp_lazytail_synced = true;
-	}*/
-
-	/* check if sending this segment will catch us up with the head */
-	/*if (! before(TCP_SKB_CB(skb)->end_seq, TCP_SKB_CB(sk_data->monkeyhead_skb)->seq)) {
-		MPTCP_LOG("\t\t\tmonkeytail will catch up with monkeyhead seq after sending this segment\n");
-		*tmp_lazytail_synced = true;
-	}*/
-
 	return skb;
 }
 
@@ -418,9 +395,6 @@ static struct sk_buff *lazytail_next_skb_from_lazytail(struct sk_buff_head *queu
  * monkeyhead's previous location.
  * If monkeyhead and lazytail are not synced it leaves lazytail right
  * where it is.
- */
-/*
- * skb = lazytail_next_skb_from_queue(&meta_sk->sk_write_queue, sk_data->skb, meta_sk);
  */
 static struct sk_buff *lazytail_next_skb_from_monkeyhead(struct sk_buff_head *queue,
 						     struct lazytailsched_sock_data *sk_data,
@@ -525,32 +499,7 @@ static struct sk_buff *lazytail_next_skb_from_monkeyhead(struct sk_buff_head *qu
 	return skb;
 }
 
-
-/*
- * Two big dilemmas for this scheduler:
- *
- * - When there is a leading flow, how to keep the tail synced with the head?
- *   In this case when the head sends a packet, the tail has to advance too.
- *   When the head jumps ahead and the tail gets left behind, then sending
- *   on the head does not advance the tail.  But we need to watch for the
- *   tail catching up so we can put them back in sync.
- *
- * - When the head skips ahead and the tail is left behind, how can we tell
- *   what packets were sent by the head?  It leaves no record.  If the tail
- *   needs to re-send *everything* to catch up, then if the leading flow
- *   gets out of sync, you could end up in a situation of re-sending
- *   everything, and never being able to catch up.
- *   Proposed solution: Keep a record of the head's most recent jump (the
- *   landing point).  The idea is that the head has already sent every packet
- *   between this point and its current location.  If the tail catches up to
- *   this point, by catching up or ACK, then the tail is considered synced
- *   with the head again.
- *   Otherwise, in the case where one flow is consistently lagging, we accept
- *   that the tail will resend packets that have been sent by the head.  In
- *   the case of a lagging subflow, the tail is sending much older packets,
- *   there is a good chance they are dropped anyway.
- *
- */
+/* The main entry point of the schduler. */
 static struct sk_buff *lazytail_next_segment(struct sock *meta_sk,
 					      int *reinject,
 					      struct sock **subsk,
@@ -563,7 +512,6 @@ static struct sk_buff *lazytail_next_segment(struct sock *meta_sk,
 	struct tcp_sock *tp;
 	struct sk_buff *skb;
 	int active_valid_sks = -1;
-	//u32 TAIL_SERVICE_INTERVAL = sysctl_mptcp_tail_service_interval;
 
 	MPTCP_LOG("********************* lazytail_next_segment *********************\n");
 	//MPTCP_LOG("\tstarting with first_tp=%p\n",first_tp);
@@ -755,5 +703,5 @@ module_exit(lazytail_unregister);
 
 MODULE_AUTHOR("Brenton Walker");
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("LAZYTAIL REDUNDANT MPTCP");
+MODULE_DESCRIPTION("LAZYTAIL MPTCP");
 MODULE_VERSION("0.90");
